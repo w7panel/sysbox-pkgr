@@ -53,6 +53,9 @@ host_containerd_conf_file="${host_etc}/containerd/config.toml"
 host_containerd_conf_file_backup="${host_containerd_conf_file}.orig"
 host_run="/mnt/host/run"
 host_var_lib="/mnt/host/var/lib"
+host_k3s_containerd_conf_dir="${host_var_lib}/rancher/k3s/agent/etc/containerd"
+host_k3s_containerd_conf_template="${host_k3s_containerd_conf_dir}/config-v3.toml.tmpl"
+host_k3s_containerd_conf_template_backup="${host_k3s_containerd_conf_template}.orig"
 host_var_lib_sysbox_deploy_k8s="${host_var_lib}/sysbox-deploy-k8s"
 
 #
@@ -732,6 +735,133 @@ function unconfig_containerd_for_sysbox() {
 }
 
 #
+# K3s Containerd Configuration Functions
+#
+
+function is_k3s_runtime() {
+	[[ "${k8s_runtime:-}" == "k3s" ]] || [[ "${k8s_runtime:-}" == "k3s-agent" ]]
+}
+
+function get_k3s_service_name() {
+	if systemctl is-active --quiet k3s-agent; then
+		echo "k3s-agent"
+	else
+		echo "k3s"
+	fi
+}
+
+function restart_k3s() {
+	local service_name=$(get_k3s_service_name)
+
+	echo "Restarting K3s service ${service_name} to apply containerd config ..."
+	systemctl restart "${service_name}"
+}
+
+function write_default_k3s_containerd_template() {
+	local sysbox_runc_path=$1
+
+	cat >"${host_k3s_containerd_conf_template}" <<EOF
+version = 3
+imports = ["/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/*.toml"]
+root = "/var/lib/rancher/k3s/agent/containerd"
+state = "/run/k3s/containerd"
+
+[grpc]
+  address = "/run/k3s/containerd/containerd.sock"
+
+[plugins.'io.containerd.internal.v1.opt']
+  path = "/var/lib/rancher/k3s/agent/containerd"
+
+[plugins.'io.containerd.grpc.v1.cri']
+  stream_server_address = "127.0.0.1"
+  stream_server_port = "10010"
+
+[plugins.'io.containerd.cri.v1.runtime']
+  enable_selinux = false
+  enable_unprivileged_ports = true
+  enable_unprivileged_icmp = true
+  device_ownership_from_security_context = false
+
+[plugins.'io.containerd.cri.v1.images']
+  snapshotter = "overlayfs"
+  disable_snapshot_annotations = true
+  use_local_image_pull = true
+
+[plugins.'io.containerd.cri.v1.images'.pinned_images]
+  sandbox = "rancher/mirrored-pause:3.6"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+  SystemdCgroup = true
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
+  SystemdCgroup = true
+  BinaryName = "${sysbox_runc_path}"
+
+[plugins.'io.containerd.cri.v1.images'.registry]
+  config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
+EOF
+}
+
+function config_k3s_containerd_for_sysbox() {
+	echo "Adding Sysbox to K3s containerd config ..."
+
+	mkdir -p "${host_k3s_containerd_conf_dir}"
+
+	local sysbox_runc_path="/usr/bin/sysbox-runc"
+	if host_flatcar_distro; then
+		sysbox_runc_path="/opt/bin/sysbox-runc"
+	fi
+
+	if [ -f "${host_k3s_containerd_conf_template}" ] && [ ! -f "${host_k3s_containerd_conf_template_backup}" ]; then
+		cp "${host_k3s_containerd_conf_template}" "${host_k3s_containerd_conf_template_backup}"
+	fi
+
+	if [ ! -f "${host_k3s_containerd_conf_template}" ]; then
+		write_default_k3s_containerd_template "${sysbox_runc_path}"
+	elif grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
+		if sed -n '/runtimes.sysbox-runc.options]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "BinaryName"; then
+			sed -i '/runtimes.sysbox-runc.options]/,/^$/ s@BinaryName = .*@BinaryName = "'"${sysbox_runc_path}"'"@' "${host_k3s_containerd_conf_template}"
+		else
+			sed -i "/runtimes.sysbox-runc.options]/a \  BinaryName = \"${sysbox_runc_path}\"" "${host_k3s_containerd_conf_template}"
+		fi
+
+		if ! sed -n '/runtimes.sysbox-runc.options]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "SystemdCgroup"; then
+			sed -i "/runtimes.sysbox-runc.options]/a \  SystemdCgroup = true" "${host_k3s_containerd_conf_template}"
+		fi
+	else
+		cat >>"${host_k3s_containerd_conf_template}" <<EOF
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
+  SystemdCgroup = true
+  BinaryName = "${sysbox_runc_path}"
+EOF
+	fi
+
+	restart_k3s
+}
+
+function unconfig_k3s_containerd_for_sysbox() {
+	echo "Removing Sysbox from K3s containerd config ..."
+
+	if [ -f "${host_k3s_containerd_conf_template}" ] && grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
+		sed -i '/runtimes.sysbox-runc.options]/,/^$/d' "${host_k3s_containerd_conf_template}"
+		sed -i '/runtimes.sysbox-runc]/,/^$/d' "${host_k3s_containerd_conf_template}"
+		restart_k3s
+	else
+		echo "sysbox-runc runtime not found in K3s containerd config"
+	fi
+}
+
+#
 # General Helper Functions
 #
 
@@ -1004,7 +1134,7 @@ function is_containerd_with_userns() {
 	fi
 
 	# Extract version number (e.g., "containerd://2.0.4" -> "2.0.4")
-	local version=$(echo "$runtime_version" | sed 's/containerd:\/\///')
+	local version=$(echo "$runtime_version" | sed 's/containerd:\/\///' | sed -E 's/^([0-9]+(\.[0-9]+){0,2}).*/\1/')
 
 	echo "Detected containerd version $version."
 
@@ -1036,7 +1166,10 @@ function runtime_precheck() {
 
 	# env var SYSBOX_USE_CRIO=true|yes forces CRI-O installation
 	# (may be set via ConfigMap for testing purposes).
-	if [[ "${SYSBOX_USE_CRIO:-}" =~ ^([Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])$ ]]; then
+	if is_k3s_runtime; then
+		echo "Will use K3s containerd as the container runtime for Sysbox."
+
+	elif [[ "${SYSBOX_USE_CRIO:-}" =~ ^([Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])$ ]]; then
 		if ! systemctl is-active --quiet crio; then
 			do_crio_install="true"
 			do_kubelet_use_crio="true"
@@ -1342,15 +1475,13 @@ function main() {
 			add_label_to_node "sysbox-runtime=installing"
 			install_sysbox_deps
 			install_sysbox
-			# Adjust cri-o's config to account for Sysbox presence and tag its restart flag
-			# accordingly. Notice that this is only needed if cri-o is being installed, there's
-			# no need to do anything in case of sysbox being updated.
-			if [[ "$do_crio_install" == "true" ]]; then
+			# Adjust the active container runtime to account for Sysbox presence.
+			if is_k3s_runtime; then
+				config_k3s_containerd_for_sysbox
+			elif [[ "$do_crio_install" == "true" ]]; then
 				config_crio_for_sysbox
 				crio_restart_pending=true
-			fi
-			# Configure containerd for sysbox-runc when using containerd 2.0 with userns support
-			if is_containerd_with_userns; then
+			elif is_containerd_with_userns; then
 				config_containerd_for_sysbox
 			fi
 			echo "yes" >${host_var_lib_sysbox_deploy_k8s}/sysbox_installed
@@ -1436,6 +1567,8 @@ function main() {
 			if [ -f ${host_var_lib_sysbox_deploy_k8s}/crio_installed ]; then
 				unconfig_crio_for_sysbox
 				crio_restart_pending=true
+			elif is_k3s_runtime; then
+				unconfig_k3s_containerd_for_sysbox
 			else
 				unconfig_containerd_for_sysbox
 			fi
