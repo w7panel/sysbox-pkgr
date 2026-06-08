@@ -1,0 +1,72 @@
+#
+# Copyright 2019-2023 Nestybox, Inc.
+#
+
+#
+# Docker image for deploying Sysbox-CE on a K3s host.
+#
+# Build with:
+#
+# docker build -t docker.cnb.cool/i0358/docker-images-chrom/sysbox-deploy-k3s .
+#
+
+# Note: we use a centos base image because it carries a systemctl that can
+# communicate with the host's systemd via dbus. This does not work when using a
+# ubuntu + systemd image (systemctl can't not connect to the host's dbus, even
+# though the host's dbus socket was mounted into the container).
+
+FROM docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd
+
+ARG sys_arch
+ENV SYS_ARCH=${sys_arch}
+ARG sysbox_version
+ENV SYSBOX_VERSION=${sysbox_version}
+
+ARG DEST=/opt/sysbox
+ARG CRICTL_VERSION="v1.35.0"
+
+RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* \
+    && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+
+RUN yum install -y curl wget git bc which epel-release \
+    && yum install -y jq
+
+RUN curl -Lso /bin/kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/${SYS_ARCH}/kubectl && \
+    chmod +x /bin/kubectl
+
+RUN wget https://github.com/TomWright/dasel/releases/download/v1.27.3/dasel_linux_${SYS_ARCH} \
+    && mv dasel_linux_${SYS_ARCH} dasel && chmod +x dasel && mv ./dasel /usr/local/bin/dasel
+
+# crictl will be copied to the host, and used by the runtime installation agents.
+RUN wget https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz \
+    && tar zxvf crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/crictl \
+    && rm -f crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz
+
+# shiftfs-dkms sources
+RUN git clone --branch k5.4 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.4 \
+    && git clone --branch k5.10 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.10 \
+    && git clone --branch k5.11 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.11 \
+    && git clone --branch k5.13 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.13 \
+    && git clone --branch k5.16 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.16 \
+    && git clone --branch k5.17 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.17 \
+    && git clone --branch k5.18 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.18 \
+    && git clone --branch k6.1 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k6.1
+
+#
+# Load Sysbox installation artifacts
+#
+
+COPY bin/sysbox-ce /opt/sysbox/bin
+
+COPY systemd/50-sysbox-mod.conf /opt/sysbox/systemd/50-sysbox-mod.conf
+COPY systemd/99-sysbox-sysctl.conf /opt/sysbox/systemd/99-sysbox-sysctl.conf
+COPY systemd/sysbox-installer-helper.service /opt/sysbox/systemd/sysbox-installer-helper.service
+COPY systemd/sysbox-removal-helper.service /opt/sysbox/systemd/sysbox-removal-helper.service
+COPY systemd/sysbox-fs.service /opt/sysbox/systemd/sysbox-fs.service
+COPY systemd/sysbox-mgr.service /opt/sysbox/systemd/sysbox-mgr.service
+COPY systemd/sysbox.service /opt/sysbox/systemd/sysbox.service
+
+COPY scripts/sysbox-deploy-k8s.sh /opt/sysbox/scripts/sysbox-deploy-k8s.sh
+COPY scripts/sysbox-installer-helper.sh /opt/sysbox/scripts/sysbox-installer-helper.sh
+COPY scripts/sysbox-removal-helper.sh /opt/sysbox/scripts/sysbox-removal-helper.sh

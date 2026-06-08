@@ -3,6 +3,7 @@
 #
 
 .PHONY: sysbox-deploy-k8s-image \
+	sysbox-deploy-k3s-image \
 	fetch_sysbox_ce_bins \
 	fetch_sysbox_ee_bins \
 	check-sysbox-artifacts \
@@ -140,6 +141,12 @@ sysbox-deploy-k8s-image: build-crio check-crio-artifacts fetch-sysbox-ce-bins ch
 		--build-arg sys_arch=$(SYS_ARCH) \
 		--build-arg sysbox_version=v$(SYSBOX_CE_VER_FULL) \
 		-f Dockerfile.sysbox-ce .
+
+sysbox-deploy-k3s-image: fetch-sysbox-ce-bins check-sysbox-artifacts
+	docker build -t docker.cnb.cool/i0358/docker-images-chrom/sysbox-deploy-k3s:v$(SYSBOX_CE_VER_FULL)$(SYSBOX_DEPLOY_K8S_IMAGE_PATCH) \
+		--build-arg sys_arch=$(SYS_ARCH) \
+		--build-arg sysbox_version=v$(SYSBOX_CE_VER_FULL) \
+		-f Dockerfile.sysbox-k3s .
 
 #
 # Cleanup targets
