@@ -35,6 +35,10 @@ sysbox_edition=""
 # The Sysbox version to install; append "-0" if it doesn't have a patch number.
 sysbox_version=$(echo "$SYSBOX_VERSION" | sed '/-[0-9]/!s/.*/&-0/')
 
+# Optional extra arguments for the Sysbox systemd units.
+SYSBOX_MGR_CONFIG="${SYSBOX_MGR_CONFIG:-}"
+SYSBOX_FS_CONFIG="${SYSBOX_FS_CONFIG:-}"
+
 # The daemonset Dockerfile places sysbox artifacts here
 sysbox_artifacts="/opt/sysbox"
 crio_artifacts="/opt/crio-deploy"

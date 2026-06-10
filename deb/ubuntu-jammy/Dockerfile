@@ -1,10 +1,19 @@
 ARG GO_IMAGE
 ARG BASE_IMAGE=ubuntu:jammy
 ARG DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu
+ARG DOCKER_APT_MIRROR=https://mirrors.aliyun.com/docker-ce/linux/ubuntu
+ARG GOPROXY=https://goproxy.cn,direct
 
 FROM ${GO_IMAGE} as golang
 
 FROM ${BASE_IMAGE}
+
+ARG UBUNTU_MIRROR
+ARG DOCKER_APT_MIRROR
+ARG GOPROXY
+
+RUN sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g; s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list
 
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
     apt-get update &&                            \
@@ -56,22 +65,30 @@ COPY --from=golang /usr/local/go /usr/local/go
 # allow 'go get' traditional behavior (fetch entire git repo). Notice that we need git's
 # metadata to allow a git-checkout operation further below.
 ENV GO111MODULE=auto
+ENV GOPROXY=${GOPROXY}
 RUN go env -w GONOSUMDB=github.com/nestybox
 
 # Install protoc compiler for gRPC.
 RUN if [ "${arch}" = "amd64" ]; then arch_str="x86_64"; \
     elif [ "${arch}" = "arm64" ]; then arch_str="aarch_64"; \
     else echo "Unsupported platform: ${arch}"; exit; fi \
-    && curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-${arch_str}.zip \
+    && curl -LO https://gh-proxy.org/https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-${arch_str}.zip \
     && unzip protoc-3.15.8-linux-${arch_str}.zip -d $HOME/.local \
     && export PATH="$PATH:$HOME/.local/bin" \
     && go install github.com/golang/protobuf/protoc-gen-go@latest \
     && export PATH="$PATH:$(go env GOPATH)/bin"
 
 # Install Docker
-RUN curl -fsSL https://get.docker.com -o get-docker.sh \
-    && sh get-docker.sh
-ADD https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/bash/docker /etc/bash_completion.d/docker.sh
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL ${DOCKER_APT_MIRROR}/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && . /etc/os-release \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] ${DOCKER_APT_MIRROR} ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
+ADD https://gh-proxy.org/https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/bash/docker /etc/bash_completion.d/docker.sh
 
 # Use the old definition for SECCOMP_NOTIF_ID_VALID in /usr/include/linux/seccomp.h
 #
