@@ -37,6 +37,9 @@ RELEASE_BASELINE_IMAGE=ubuntu-jammy
 GO_BASE_IMAGE=golang
 GO_VERSION:=1.22
 GO_IMAGE=$(GO_BASE_IMAGE):$(GO_VERSION)
+UBUNTU_MIRROR?=http://mirrors.aliyun.com/ubuntu
+DOCKER_APT_MIRROR?=https://mirrors.aliyun.com/docker-ce/linux/ubuntu
+GOPROXY?=https://goproxy.cn,direct
 
 # Sysbox source-code locations.
 ifeq ($(EDITION),ce)
@@ -66,6 +69,9 @@ DOCKER_BUILD=docker build                              \
 	--build-arg GO_IMAGE=$(GO_IMAGE)                   \
 	--build-arg arch=$(ARCH)                           \
 	--build-arg DEB_FILES=sysbox-${EDITION}            \
+	--build-arg UBUNTU_MIRROR=$(UBUNTU_MIRROR)         \
+	--build-arg DOCKER_APT_MIRROR=$(DOCKER_APT_MIRROR) \
+	--build-arg GOPROXY=$(GOPROXY)                     \
 	-t build-$@/$(ARCH)                                \
 	-f $(CURDIR)/$@/Dockerfile .
 
@@ -83,6 +89,9 @@ DOCKER_BUILD_RELEASE=docker build                                \
 	--build-arg GO_IMAGE=$(GO_IMAGE)                             \
 	--build-arg arch=$(ARCH)                                     \
 	--build-arg DEB_FILES=sysbox-${EDITION}                      \
+	--build-arg UBUNTU_MIRROR=$(UBUNTU_MIRROR)                   \
+	--build-arg DOCKER_APT_MIRROR=$(DOCKER_APT_MIRROR)           \
+	--build-arg GOPROXY=$(GOPROXY)                               \
 	-t build-$(RELEASE_BASELINE_IMAGE)/$(ARCH)                   \
 	-f $(CURDIR)/$(RELEASE_BASELINE_IMAGE)/Dockerfile .
 
