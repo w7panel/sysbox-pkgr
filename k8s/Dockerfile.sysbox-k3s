@@ -7,7 +7,9 @@
 #
 # Build with:
 #
-# docker build -t docker.cnb.cool/i0358/docker-images-chrom/sysbox-deploy-k3s .
+# docker build -t ghcr.io/nestybox/sysbox-deploy-k3s .
+# China mirror alternative:
+# docker build --build-arg BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd -t docker.cnb.cool/i0358/docker-images-chrom/sysbox-deploy-k3s .
 #
 
 # Note: we use a centos base image because it carries a systemctl that can
@@ -15,7 +17,10 @@
 # ubuntu + systemd image (systemctl can't not connect to the host's dbus, even
 # though the host's dbus socket was mounted into the container).
 
-FROM docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd
+ARG BASE_IMAGE=ghcr.io/nestybox/centos7/systemd
+# China mirror alternative:
+# ARG BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd
+FROM ${BASE_IMAGE}
 
 ARG sys_arch
 ENV SYS_ARCH=${sys_arch}
@@ -30,35 +35,45 @@ RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* \
     && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
 
 RUN yum install -y curl wget git bc which epel-release \
-    && sed -i 's|^metalink=|#metalink=|g; s|^mirrorlist=|#mirrorlist=|g; s|^#baseurl=http://download.fedoraproject.org/pub/epel/|baseurl=https://mirrors.aliyun.com/epel/|g' /etc/yum.repos.d/epel.repo \
     && yum install -y jq
 
+# China mirror alternative for EPEL:
+# RUN sed -i 's|^metalink=|#metalink=|g; s|^mirrorlist=|#mirrorlist=|g; s|^#baseurl=http://download.fedoraproject.org/pub/epel/|baseurl=https://mirrors.aliyun.com/epel/|g' /etc/yum.repos.d/epel.repo
+
 RUN case "${SYS_ARCH}" in \
-        amd64) kubectl_arch="x86_64" ;; \
-        arm64) kubectl_arch="aarch64" ;; \
+        amd64|arm64) kubectl_arch="${SYS_ARCH}" ;; \
         *) echo "unsupported kubectl arch: ${SYS_ARCH}" && exit 1 ;; \
     esac \
-    && yum install -y https://mirrors.aliyun.com/kubernetes-new/core/stable/v1.32/rpm/${kubectl_arch}/kubectl-${KUBECTL_VERSION}-150500.1.1.${kubectl_arch}.rpm \
+    && curl -Lso /bin/kubectl https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${kubectl_arch}/kubectl \
     && chmod +x /bin/kubectl
 
-RUN wget https://gh-proxy.org/https://github.com/TomWright/dasel/releases/download/v1.27.3/dasel_linux_${SYS_ARCH} \
+# China mirror alternative for kubectl RPM:
+# RUN yum install -y https://mirrors.aliyun.com/kubernetes-new/core/stable/v1.32/rpm/${kubectl_arch}/kubectl-${KUBECTL_VERSION}-150500.1.1.${kubectl_arch}.rpm
+
+RUN wget https://github.com/TomWright/dasel/releases/download/v1.27.3/dasel_linux_${SYS_ARCH} \
     && mv dasel_linux_${SYS_ARCH} dasel && chmod +x dasel && mv ./dasel /usr/local/bin/dasel
+# China mirror alternative:
+# RUN wget https://gh-proxy.org/https://github.com/TomWright/dasel/releases/download/v1.27.3/dasel_linux_${SYS_ARCH}
 
 # crictl will be copied to the host, and used by the runtime installation agents.
-RUN wget https://gh-proxy.org/https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz \
+RUN wget https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz \
     && tar zxvf crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz -C /usr/local/bin \
     && chmod +x /usr/local/bin/crictl \
     && rm -f crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz
+# China mirror alternative:
+# RUN wget https://gh-proxy.org/https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${SYS_ARCH}.tar.gz
 
 # shiftfs-dkms sources
-RUN git clone --branch k5.4 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.4 \
-    && git clone --branch k5.10 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.10 \
-    && git clone --branch k5.11 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.11 \
-    && git clone --branch k5.13 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.13 \
-    && git clone --branch k5.16 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.16 \
-    && git clone --branch k5.17 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.17 \
-    && git clone --branch k5.18 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.18 \
-    && git clone --branch k6.1 https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k6.1
+RUN git clone --branch k5.4 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.4 \
+    && git clone --branch k5.10 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.10 \
+    && git clone --branch k5.11 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.11 \
+    && git clone --branch k5.13 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.13 \
+    && git clone --branch k5.16 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.16 \
+    && git clone --branch k5.17 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.17 \
+    && git clone --branch k5.18 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k5.18 \
+    && git clone --branch k6.1 https://github.com/nestybox/shiftfs-dkms.git /opt/shiftfs-k6.1
+# China mirror alternative for GitHub clones:
+# https://gh-proxy.org/https://github.com/nestybox/shiftfs-dkms.git
 
 #
 # Load Sysbox installation artifacts

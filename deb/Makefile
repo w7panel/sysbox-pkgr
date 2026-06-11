@@ -37,9 +37,13 @@ RELEASE_BASELINE_IMAGE=ubuntu-jammy
 GO_BASE_IMAGE=golang
 GO_VERSION:=1.22
 GO_IMAGE=$(GO_BASE_IMAGE):$(GO_VERSION)
-UBUNTU_MIRROR?=http://mirrors.aliyun.com/ubuntu
-DOCKER_APT_MIRROR?=https://mirrors.aliyun.com/docker-ce/linux/ubuntu
-GOPROXY?=https://goproxy.cn,direct
+# China mirror alternatives:
+# UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu
+# DOCKER_APT_MIRROR=https://mirrors.aliyun.com/docker-ce/linux/ubuntu
+# GOPROXY=https://goproxy.cn,direct
+UBUNTU_MIRROR?=http://archive.ubuntu.com/ubuntu
+DOCKER_APT_MIRROR?=https://download.docker.com/linux/ubuntu
+GOPROXY?=https://proxy.golang.org,direct
 
 # Sysbox source-code locations.
 ifeq ($(EDITION),ce)
