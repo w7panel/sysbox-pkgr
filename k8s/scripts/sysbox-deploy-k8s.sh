@@ -303,6 +303,7 @@ function copy_sysbox_to_host() {
 	cp "${artifacts_dir}/sysbox-mgr" "${host_bin}/sysbox-mgr"
 	cp "${artifacts_dir}/sysbox-fs" "${host_bin}/sysbox-fs"
 	cp "${artifacts_dir}/sysbox-runc" "${host_bin}/sysbox-runc"
+	cp "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
 
 	# Keep track of the sysbox version installed on the host (upgrade purposes).
 	echo "${sysbox_version}" >${host_var_lib_sysbox_deploy_k8s}/sysbox_installed_version
@@ -312,6 +313,7 @@ function rm_sysbox_from_host() {
 	rm -f "${host_bin}/sysbox-mgr"
 	rm -f "${host_bin}/sysbox-fs"
 	rm -f "${host_bin}/sysbox-runc"
+	rm -f "${host_bin}/sysbox-snapshotter"
 
 	# Remove sysbox from the /etc/subuid and /etc/subgid files
 	sed -i '/sysbox:/d' "${host_etc}/subuid"
@@ -352,16 +354,19 @@ function copy_sysbox_config_to_host() {
 	cp "${sysbox_artifacts}/systemd/sysbox.service" "${host_systemd}/sysbox.service"
 	cp "${sysbox_artifacts}/systemd/sysbox-mgr.service" "${host_systemd}/sysbox-mgr.service"
 	cp "${sysbox_artifacts}/systemd/sysbox-fs.service" "${host_systemd}/sysbox-fs.service"
+	cp "${sysbox_artifacts}/systemd/sysbox-snapshotter.service" "${host_systemd}/sysbox-snapshotter.service"
 	systemctl daemon-reload
 	systemctl enable sysbox.service
 	systemctl enable sysbox-mgr.service
 	systemctl enable sysbox-fs.service
+	systemctl enable sysbox-snapshotter.service
 }
 
 function rm_systemd_units_from_host() {
 	rm -f "${host_systemd}/sysbox.service"
 	rm -f "${host_systemd}/sysbox-mgr.service"
 	rm -f "${host_systemd}/sysbox-fs.service"
+	rm -f "${host_systemd}/sysbox-snapshotter.service"
 	systemctl daemon-reload
 }
 
@@ -714,6 +719,22 @@ function config_containerd_for_sysbox() {
 			-v true
 	fi
 
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.snapshotter" \
+		-v "sysbox"
+
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "proxy_plugins.sysbox.type" \
+		-v "snapshot"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "proxy_plugins.sysbox.address" \
+		-v "/run/sysbox-snapshotter.sock"
+	dasel delete -f "${host_containerd_conf_file}" -p toml \
+		-s "proxy_plugins.sysbox.capabilities" >/dev/null 2>&1 || true
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-m "proxy_plugins.sysbox.capabilities.[]" \
+		"remap-ids"
+
 	echo "Restarting containerd to apply changes ..."
 	systemctl restart containerd
 }
@@ -729,6 +750,8 @@ function unconfig_containerd_for_sysbox() {
 			# Delete the entire sysbox-runc runtime section using dasel
 			dasel delete -f "${host_containerd_conf_file}" -p toml \
 				-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc"
+			dasel delete -f "${host_containerd_conf_file}" -p toml \
+				-s "proxy_plugins.sysbox" >/dev/null 2>&1 || true
 
 			echo "Restarting containerd to apply changes ..."
 			systemctl restart containerd
@@ -770,6 +793,11 @@ imports = ["/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/*.toml"]
 root = "/var/lib/rancher/k3s/agent/containerd"
 state = "/run/k3s/containerd"
 
+[proxy_plugins."sysbox"]
+  type = "snapshot"
+  address = "/run/sysbox-snapshotter.sock"
+  capabilities = ["remap-ids"]
+
 [grpc]
   address = "/run/k3s/containerd/containerd.sock"
 
@@ -802,6 +830,7 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
+  snapshotter = "sysbox"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
   SystemdCgroup = true
@@ -829,6 +858,12 @@ function config_k3s_containerd_for_sysbox() {
 	if [ ! -f "${host_k3s_containerd_conf_template}" ]; then
 		write_default_k3s_containerd_template "${sysbox_runc_path}"
 	elif grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
+		if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "snapshotter"; then
+			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*snapshotter = .*@  snapshotter = "sysbox"@' "${host_k3s_containerd_conf_template}"
+		else
+			sed -i "/runtimes.sysbox-runc]/a \  snapshotter = \"sysbox\"" "${host_k3s_containerd_conf_template}"
+		fi
+
 		if sed -n '/runtimes.sysbox-runc.options]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "BinaryName"; then
 			sed -i '/runtimes.sysbox-runc.options]/,/^$/ s@BinaryName = .*@BinaryName = "'"${sysbox_runc_path}"'"@' "${host_k3s_containerd_conf_template}"
 		else
@@ -838,15 +873,47 @@ function config_k3s_containerd_for_sysbox() {
 		if ! sed -n '/runtimes.sysbox-runc.options]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "SystemdCgroup"; then
 			sed -i "/runtimes.sysbox-runc.options]/a \  SystemdCgroup = true" "${host_k3s_containerd_conf_template}"
 		fi
+
+		if grep -q '^\[proxy_plugins\."sysbox"\]' "${host_k3s_containerd_conf_template}"; then
+			if sed -n '/^\[proxy_plugins\."sysbox"\]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "address"; then
+				sed -i '/^\[proxy_plugins\."sysbox"\]/,/^$/ s@^[[:space:]]*address = .*@  address = "/run/sysbox-snapshotter.sock"@' "${host_k3s_containerd_conf_template}"
+			else
+				sed -i '/^\[proxy_plugins\."sysbox"\]/a \  address = "/run/sysbox-snapshotter.sock"' "${host_k3s_containerd_conf_template}"
+			fi
+			if sed -n '/^\[proxy_plugins\."sysbox"\]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "type"; then
+				sed -i '/^\[proxy_plugins\."sysbox"\]/,/^$/ s@^[[:space:]]*type = .*@  type = "snapshot"@' "${host_k3s_containerd_conf_template}"
+			else
+				sed -i '/^\[proxy_plugins\."sysbox"\]/a \  type = "snapshot"' "${host_k3s_containerd_conf_template}"
+			fi
+			if sed -n '/^\[proxy_plugins\."sysbox"\]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "capabilities"; then
+				sed -i '/^\[proxy_plugins\."sysbox"\]/,/^$/ s@^[[:space:]]*capabilities = .*@  capabilities = ["remap-ids"]@' "${host_k3s_containerd_conf_template}"
+			else
+				sed -i '/^\[proxy_plugins\."sysbox"\]/a \  capabilities = ["remap-ids"]' "${host_k3s_containerd_conf_template}"
+			fi
+		else
+			cat >>"${host_k3s_containerd_conf_template}" <<EOF
+
+[proxy_plugins."sysbox"]
+  type = "snapshot"
+  address = "/run/sysbox-snapshotter.sock"
+  capabilities = ["remap-ids"]
+EOF
+		fi
 	else
 		cat >>"${host_k3s_containerd_conf_template}" <<EOF
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
+  snapshotter = "sysbox"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
   SystemdCgroup = true
   BinaryName = "${sysbox_runc_path}"
+
+[proxy_plugins."sysbox"]
+  type = "snapshot"
+  address = "/run/sysbox-snapshotter.sock"
+  capabilities = ["remap-ids"]
 EOF
 	fi
 
@@ -859,6 +926,7 @@ function unconfig_k3s_containerd_for_sysbox() {
 	if [ -f "${host_k3s_containerd_conf_template}" ] && grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
 		sed -i '/runtimes.sysbox-runc.options]/,/^$/d' "${host_k3s_containerd_conf_template}"
 		sed -i '/runtimes.sysbox-runc]/,/^$/d' "${host_k3s_containerd_conf_template}"
+		sed -i '/^\[proxy_plugins\."sysbox"\]/,/^$/d' "${host_k3s_containerd_conf_template}"
 		restart_k3s
 	else
 		echo "sysbox-runc runtime not found in K3s containerd config"
