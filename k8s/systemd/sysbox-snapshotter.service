@@ -1,0 +1,18 @@
+[Unit]
+Description=sysbox-snapshotter (containerd proxy snapshotter for Sysbox rootfs persistence)
+PartOf=sysbox.service
+After=sysbox-mgr.service sysbox-fs.service
+Before=containerd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sysbox-snapshotter --address /run/sysbox-snapshotter.sock --root /var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.sysbox
+TimeoutStartSec=45
+TimeoutStopSec=90
+StartLimitInterval=0
+OOMScoreAdjust=-500
+LimitNOFILE=infinity
+LimitNPROC=infinity
+
+[Install]
+WantedBy=sysbox.service
