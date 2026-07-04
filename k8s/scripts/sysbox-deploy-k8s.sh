@@ -816,7 +816,7 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.images']
   snapshotter = "overlayfs"
-  disable_snapshot_annotations = true
+  disable_snapshot_annotations = false
   use_local_image_pull = true
 
 [plugins.'io.containerd.cri.v1.images'.pinned_images]
