@@ -38,6 +38,11 @@ sysbox_version=$(echo "$SYSBOX_VERSION" | sed '/-[0-9]/!s/.*/&-0/')
 # Optional extra arguments for the Sysbox systemd units.
 SYSBOX_MGR_CONFIG="${SYSBOX_MGR_CONFIG:-}"
 SYSBOX_FS_CONFIG="${SYSBOX_FS_CONFIG:-}"
+SYSBOX_ADMISSION_NAMESPACE="${SYSBOX_ADMISSION_NAMESPACE:-${POD_NAMESPACE:-kube-system}}"
+SYSBOX_ADMISSION_WEBHOOK_NAME="${SYSBOX_ADMISSION_WEBHOOK_NAME:-sysbox-webhook-mutator}"
+SYSBOX_ADMISSION_CA_SECRET_NAME="${SYSBOX_ADMISSION_CA_SECRET_NAME:-sysbox-admission-webhook-ca}"
+SYSBOX_ADMISSION_TLS_SECRET_NAME="${SYSBOX_ADMISSION_TLS_SECRET_NAME:-sysbox-admission-webhook-tls}"
+SYSBOX_ADMISSION_LEASE_NAME="${SYSBOX_ADMISSION_LEASE_NAME:-sysbox-admission-webhook-init}"
 
 # The daemonset Dockerfile places sysbox artifacts here
 sysbox_artifacts="/opt/sysbox"
@@ -1456,6 +1461,17 @@ function delete_sysbox_pods() {
 	set -e
 }
 
+function cleanup_sysbox_admission_resources() {
+	set +e
+
+	echo "Cleaning up sysbox-admission runtime-owned Kubernetes resources..."
+	kubectl delete mutatingwebhookconfiguration "${SYSBOX_ADMISSION_WEBHOOK_NAME}" --ignore-not-found
+	kubectl delete secret -n "${SYSBOX_ADMISSION_NAMESPACE}" "${SYSBOX_ADMISSION_CA_SECRET_NAME}" "${SYSBOX_ADMISSION_TLS_SECRET_NAME}" --ignore-not-found
+	kubectl delete lease.coordination.k8s.io -n "${SYSBOX_ADMISSION_NAMESPACE}" "${SYSBOX_ADMISSION_LEASE_NAME}" --ignore-not-found
+
+	set -e
+}
+
 #
 # Main Function
 #
@@ -1613,6 +1629,7 @@ function main() {
 
 	cleanup)
 		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
+		cleanup_sysbox_admission_resources
 
 		# Prevent new pods being scheduled during sysbox cleanup phase.
 		add_taint_to_node "${k8s_taints}"

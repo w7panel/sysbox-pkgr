@@ -13,7 +13,7 @@
 
 SHELL := /bin/bash
 
-SYSBOX_BINS = sysbox-runc sysbox-mgr sysbox-fs sysbox-snapshotter
+SYSBOX_BINS = sysbox-runc sysbox-mgr sysbox-fs sysbox-snapshotter sysbox-admission
 
 # Obtain the version to build from the Sysbox repo itself. If a full version string
 # is not found in the corresponding VERSION file, append a dummy revision/patch ("0")
