@@ -107,6 +107,7 @@ do_sysbox_update="false"
 do_crio_install="false"  # only set to true if containerd does not support user-namespaces with alternative runtimes.
 do_kubelet_use_crio="false"
 sysbox_install_in_progress="false"
+sysbox_snapshotter_enabled="true"
 
 #
 # CRI-O Installation Functions
@@ -308,10 +309,13 @@ function copy_sysbox_to_host() {
 	cp "${artifacts_dir}/sysbox-mgr" "${host_bin}/sysbox-mgr"
 	cp "${artifacts_dir}/sysbox-fs" "${host_bin}/sysbox-fs"
 	cp "${artifacts_dir}/sysbox-runc" "${host_bin}/sysbox-runc"
-	cp "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
+	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+		cp "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
+	fi
 
 	# Keep track of the sysbox version installed on the host (upgrade purposes).
 	echo "${sysbox_version}" >${host_var_lib_sysbox_deploy_k8s}/sysbox_installed_version
+	echo "${sysbox_snapshotter_enabled}" >${host_var_lib_sysbox_deploy_k8s}/sysbox_snapshotter_enabled
 }
 
 function rm_sysbox_from_host() {
@@ -325,6 +329,7 @@ function rm_sysbox_from_host() {
 	sed -i '/sysbox:/d' "${host_etc}/subgid"
 
 	rm -f "${host_var_lib_sysbox_deploy_k8s}/sysbox_installed_version"
+	rm -f "${host_var_lib_sysbox_deploy_k8s}/sysbox_snapshotter_enabled"
 }
 
 function copy_sysbox_env_config_to_host() {
@@ -346,6 +351,11 @@ function config_sysbox_env() {
 # Update Sysbox's systemd unit files with the received configMap configuration
 # corresponding to the sysbox-mgr and sysbox-fs services.
 function config_sysbox() {
+	if [[ "${sysbox_snapshotter_enabled}" != "true" ]]; then
+		sed -i 's/ sysbox-snapshotter.service//g' ${sysbox_artifacts}/systemd/sysbox.service
+		sed -i 's@ && /usr/bin/sysbox-snapshotter --version@@' ${sysbox_artifacts}/systemd/sysbox.service
+	fi
+
 	if [ -n "$SYSBOX_MGR_CONFIG" ]; then
 		sed -i "/^ExecStart=/ s|/usr/bin/sysbox-mgr|/usr/bin/sysbox-mgr ${SYSBOX_MGR_CONFIG}|" ${sysbox_artifacts}/systemd/sysbox-mgr.service
 	fi
@@ -359,12 +369,18 @@ function copy_sysbox_config_to_host() {
 	cp "${sysbox_artifacts}/systemd/sysbox.service" "${host_systemd}/sysbox.service"
 	cp "${sysbox_artifacts}/systemd/sysbox-mgr.service" "${host_systemd}/sysbox-mgr.service"
 	cp "${sysbox_artifacts}/systemd/sysbox-fs.service" "${host_systemd}/sysbox-fs.service"
-	cp "${sysbox_artifacts}/systemd/sysbox-snapshotter.service" "${host_systemd}/sysbox-snapshotter.service"
+	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+		cp "${sysbox_artifacts}/systemd/sysbox-snapshotter.service" "${host_systemd}/sysbox-snapshotter.service"
+	else
+		rm -f "${host_systemd}/sysbox-snapshotter.service"
+	fi
 	systemctl daemon-reload
 	systemctl enable sysbox.service
 	systemctl enable sysbox-mgr.service
 	systemctl enable sysbox-fs.service
-	systemctl enable sysbox-snapshotter.service
+	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+		systemctl enable sysbox-snapshotter.service
+	fi
 }
 
 function rm_systemd_units_from_host() {
@@ -724,21 +740,28 @@ function config_containerd_for_sysbox() {
 			-v true
 	fi
 
-	dasel put string -f "${host_containerd_conf_file}" -p toml \
-		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.snapshotter" \
-		-v "sysbox"
+	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+		dasel put string -f "${host_containerd_conf_file}" -p toml \
+			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.snapshotter" \
+			-v "sysbox"
 
-	dasel put string -f "${host_containerd_conf_file}" -p toml \
-		-s "proxy_plugins.sysbox.type" \
-		-v "snapshot"
-	dasel put string -f "${host_containerd_conf_file}" -p toml \
-		-s "proxy_plugins.sysbox.address" \
-		-v "/run/sysbox-snapshotter.sock"
-	dasel delete -f "${host_containerd_conf_file}" -p toml \
-		-s "proxy_plugins.sysbox.capabilities" >/dev/null 2>&1 || true
-	dasel put string -f "${host_containerd_conf_file}" -p toml \
-		-m "proxy_plugins.sysbox.capabilities.[]" \
-		"remap-ids"
+		dasel put string -f "${host_containerd_conf_file}" -p toml \
+			-s "proxy_plugins.sysbox.type" \
+			-v "snapshot"
+		dasel put string -f "${host_containerd_conf_file}" -p toml \
+			-s "proxy_plugins.sysbox.address" \
+			-v "/run/sysbox-snapshotter.sock"
+		dasel delete -f "${host_containerd_conf_file}" -p toml \
+			-s "proxy_plugins.sysbox.capabilities" >/dev/null 2>&1 || true
+		dasel put string -f "${host_containerd_conf_file}" -p toml \
+			-m "proxy_plugins.sysbox.capabilities.[]" \
+			"remap-ids"
+	else
+		dasel delete -f "${host_containerd_conf_file}" -p toml \
+			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.snapshotter" >/dev/null 2>&1 || true
+		dasel delete -f "${host_containerd_conf_file}" -p toml \
+			-s "proxy_plugins.sysbox" >/dev/null 2>&1 || true
+	fi
 
 	echo "Restarting containerd to apply changes ..."
 	systemctl restart containerd
@@ -791,6 +814,16 @@ function restart_k3s() {
 
 function write_default_k3s_containerd_template() {
 	local sysbox_runc_path=$1
+	local snapshotter_config=""
+	local proxy_config=""
+	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+		snapshotter_config='  snapshotter = "sysbox"'
+		proxy_config='[proxy_plugins."sysbox"]
+  type = "snapshot"
+  address = "/run/sysbox-snapshotter.sock"
+  capabilities = ["remap-ids"]
+'
+	fi
 
 	cat >"${host_k3s_containerd_conf_template}" <<EOF
 version = 3
@@ -798,10 +831,7 @@ imports = ["/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/*.toml"]
 root = "/var/lib/rancher/k3s/agent/containerd"
 state = "/run/k3s/containerd"
 
-[proxy_plugins."sysbox"]
-  type = "snapshot"
-  address = "/run/sysbox-snapshotter.sock"
-  capabilities = ["remap-ids"]
+${proxy_config}
 
 [grpc]
   address = "/run/k3s/containerd/containerd.sock"
@@ -835,7 +865,7 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
-  snapshotter = "sysbox"
+${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
   SystemdCgroup = true
@@ -863,10 +893,14 @@ function config_k3s_containerd_for_sysbox() {
 	if [ ! -f "${host_k3s_containerd_conf_template}" ]; then
 		write_default_k3s_containerd_template "${sysbox_runc_path}"
 	elif grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
-		if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "snapshotter"; then
-			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*snapshotter = .*@  snapshotter = "sysbox"@' "${host_k3s_containerd_conf_template}"
+		if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+			if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "snapshotter"; then
+				sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*snapshotter = .*@  snapshotter = "sysbox"@' "${host_k3s_containerd_conf_template}"
+			else
+				sed -i "/runtimes.sysbox-runc]/a \  snapshotter = \"sysbox\"" "${host_k3s_containerd_conf_template}"
+			fi
 		else
-			sed -i "/runtimes.sysbox-runc]/a \  snapshotter = \"sysbox\"" "${host_k3s_containerd_conf_template}"
+			sed -i '/runtimes.sysbox-runc]/,/^$/ { /^[[:space:]]*snapshotter = /d; }' "${host_k3s_containerd_conf_template}"
 		fi
 
 		if sed -n '/runtimes.sysbox-runc.options]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "BinaryName"; then
@@ -879,7 +913,9 @@ function config_k3s_containerd_for_sysbox() {
 			sed -i "/runtimes.sysbox-runc.options]/a \  SystemdCgroup = true" "${host_k3s_containerd_conf_template}"
 		fi
 
-		if grep -q '^\[proxy_plugins\."sysbox"\]' "${host_k3s_containerd_conf_template}"; then
+		if [[ "${sysbox_snapshotter_enabled}" != "true" ]]; then
+			sed -i '/^\[proxy_plugins\."sysbox"\]/,/^$/d' "${host_k3s_containerd_conf_template}"
+		elif grep -q '^\[proxy_plugins\."sysbox"\]' "${host_k3s_containerd_conf_template}"; then
 			if sed -n '/^\[proxy_plugins\."sysbox"\]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "address"; then
 				sed -i '/^\[proxy_plugins\."sysbox"\]/,/^$/ s@^[[:space:]]*address = .*@  address = "/run/sysbox-snapshotter.sock"@' "${host_k3s_containerd_conf_template}"
 			else
@@ -905,20 +941,27 @@ function config_k3s_containerd_for_sysbox() {
 EOF
 		fi
 	else
+		local snapshotter_config=""
+		local proxy_config=""
+		if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+			snapshotter_config='  snapshotter = "sysbox"'
+			proxy_config='[proxy_plugins."sysbox"]
+  type = "snapshot"
+  address = "/run/sysbox-snapshotter.sock"
+  capabilities = ["remap-ids"]
+'
+		fi
 		cat >>"${host_k3s_containerd_conf_template}" <<EOF
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
-  snapshotter = "sysbox"
+${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
   SystemdCgroup = true
   BinaryName = "${sysbox_runc_path}"
 
-[proxy_plugins."sysbox"]
-  type = "snapshot"
-  address = "/run/sysbox-snapshotter.sock"
-  capabilities = ["remap-ids"]
+${proxy_config}
 EOF
 	fi
 
@@ -949,7 +992,19 @@ function die() {
 }
 
 function print_usage() {
-	echo "Usage: $0 [ce|ee] [install|cleanup]"
+	echo "Usage: $0 [ce|ee] [install|cleanup] [--snapshotter-enabled=true|false]"
+}
+
+function parse_bool_arg() {
+	case "$2" in
+	true|false)
+		printf '%s\n' "$2"
+		;;
+	*)
+		print_usage
+		die "invalid $1 value: $2"
+		;;
+	esac
 }
 
 function get_k8s_version() {
@@ -1136,6 +1191,7 @@ function is_sysbox_upgraded() {
 function is_sysbox_config_changed() {
 	local sysbox_mgr_config=""
 	local sysbox_fs_config=""
+	local sysbox_snapshotter_config="true"
 	local sysbox_sysctl_config=""
 	local sysbox_mod_config=""
 
@@ -1147,9 +1203,14 @@ function is_sysbox_config_changed() {
 	if [ -f ${host_var_lib_sysbox_deploy_k8s}/sysbox_fs_config ]; then
 		sysbox_fs_config=$(cat ${host_var_lib_sysbox_deploy_k8s}/sysbox_fs_config)
 	fi
+	if [ -f ${host_var_lib_sysbox_deploy_k8s}/sysbox_snapshotter_enabled ]; then
+		sysbox_snapshotter_config=$(cat ${host_var_lib_sysbox_deploy_k8s}/sysbox_snapshotter_enabled)
+	fi
 
-	if [ "$sysbox_mgr_config" != "$SYSBOX_MGR_CONFIG" ] || [ "$sysbox_fs_config" != "$SYSBOX_FS_CONFIG" ]; then
-		echo "Sysbox operational settings have changed -- sysbox-mgr: ${SYSBOX_MGR_CONFIG}, sysbox-fs: ${SYSBOX_FS_CONFIG}"
+	if [ "$sysbox_mgr_config" != "$SYSBOX_MGR_CONFIG" ] || \
+		[ "$sysbox_fs_config" != "$SYSBOX_FS_CONFIG" ] || \
+		[ "$sysbox_snapshotter_config" != "$sysbox_snapshotter_enabled" ]; then
+		echo "Sysbox operational settings have changed -- sysbox-mgr: ${SYSBOX_MGR_CONFIG}, sysbox-fs: ${SYSBOX_FS_CONFIG}, snapshotter-enabled: ${sysbox_snapshotter_enabled}"
 		return 0
 	fi
 
@@ -1528,6 +1589,19 @@ function main() {
 		print_usage
 		die "invalid arguments"
 	fi
+	shift 2
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--snapshotter-enabled=*)
+			sysbox_snapshotter_enabled=$(parse_bool_arg "--snapshotter-enabled" "${1#*=}")
+			;;
+		*)
+			print_usage
+			die "invalid argument: $1"
+			;;
+		esac
+		shift
+	done
 
 	# Perform distro-specific adjustments.
 	do_distro_adjustments
