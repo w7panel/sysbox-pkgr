@@ -38,6 +38,7 @@ SOURCE_FILES =  sysbox.tgz           \
 		sysbox.service       \
 		sysbox-fs.service    \
 		sysbox-mgr.service   \
+		sysbox-snapshotter.service \
 		99-sysbox-sysctl.conf \
 		50-sysbox-mod.conf
 
@@ -116,6 +117,10 @@ sources/sysbox-fs.service: ../systemd/sysbox-fs.service
 	cp $< $@
 
 sources/sysbox-mgr.service: ../systemd/sysbox-mgr.service
+	mkdir -p $(@D)
+	cp $< $@
+
+sources/sysbox-snapshotter.service: ../systemd/sysbox-snapshotter.service
 	mkdir -p $(@D)
 	cp $< $@
 

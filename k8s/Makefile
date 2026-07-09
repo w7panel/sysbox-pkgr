@@ -113,18 +113,16 @@ crio-build-container:
 # │   ├── v1.27
 # │   │   └── crio
 # ├── sysbox-ce
-# │   ├── ubuntu-bionic
-# │   │   ├── sysbox-fs
-# │   │   ├── sysbox-mgr
-# │   │   └── sysbox-runc
-# │   └── ubuntu-focal
+# │   └── generic
+# │       ├── sysbox-admission
 # │       ├── sysbox-fs
 # │       ├── sysbox-mgr
-# │       └── sysbox-runc
+# │       ├── sysbox-runc
+# │       └── sysbox-snapshotter
 #
 
 check-sysbox-artifacts:
-	$(foreach file,$(SYSBOX_BINS),[ -f "bin/sysbox-ce/generic/$(file)" ] || "missing sysbox-ce binary: bin/sysbox-ce/generic/$(file)")
+	@$(foreach file,$(SYSBOX_BINS),[ -f "bin/sysbox-ce/generic/$(file)" ] || { echo "missing sysbox-ce binary: bin/sysbox-ce/generic/$(file)"; exit 1; };)
 
 check-crio-artifacts:
 	@$(foreach version,$(CRIO_VERSIONS),[ -f "bin/crio/$(version)/crio" ] || "missing CRI-O binary: bin/crio/$(version)/crio";)

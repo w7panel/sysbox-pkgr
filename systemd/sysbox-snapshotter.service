@@ -6,7 +6,7 @@ Before=containerd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/sysbox-snapshotter --address /run/sysbox-snapshotter.sock --root /var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.sysbox
+ExecStart=/usr/bin/sysbox-snapshotter --socket /run/sysbox-snapshotter.sock --root /var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.sysbox --containerd-socket /run/k3s/containerd/containerd.sock
 TimeoutStartSec=45
 TimeoutStopSec=90
 StartLimitInterval=0

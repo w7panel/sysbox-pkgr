@@ -309,6 +309,7 @@ function copy_sysbox_to_host() {
 	cp "${artifacts_dir}/sysbox-mgr" "${host_bin}/sysbox-mgr"
 	cp "${artifacts_dir}/sysbox-fs" "${host_bin}/sysbox-fs"
 	cp "${artifacts_dir}/sysbox-runc" "${host_bin}/sysbox-runc"
+	cp "${artifacts_dir}/sysbox-admission" "${host_bin}/sysbox-admission"
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
 		cp "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
 	fi
@@ -323,6 +324,7 @@ function rm_sysbox_from_host() {
 	rm -f "${host_bin}/sysbox-fs"
 	rm -f "${host_bin}/sysbox-runc"
 	rm -f "${host_bin}/sysbox-snapshotter"
+	rm -f "${host_bin}/sysbox-admission"
 
 	# Remove sysbox from the /etc/subuid and /etc/subgid files
 	sed -i '/sysbox:/d' "${host_etc}/subuid"
@@ -723,26 +725,40 @@ function config_containerd_for_sysbox() {
 		echo "sysbox-runc runtime already configured in containerd config"
 	else
 		echo "Configuring sysbox-runc runtime in containerd config ..."
-
-		# Set the runtime_type
-		dasel put string -f "${host_containerd_conf_file}" -p toml \
-			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.runtime_type" \
-			-v "io.containerd.runc.v2"
-
-		# Set BinaryName option
-		dasel put string -f "${host_containerd_conf_file}" -p toml \
-			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.options.BinaryName" \
-			-v "${sysbox_runc_path}"
-
-		# Set SystemdCgroup option
-		dasel put bool -f "${host_containerd_conf_file}" -p toml \
-			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.options.SystemdCgroup" \
-			-v true
 	fi
+
+	# Keep both containerd 1.x and 2.x CRI config paths aligned.
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.runtime_type" \
+		-v "io.containerd.runc.v2"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.runtime_type" \
+		-v "io.containerd.runc.v2"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.options.BinaryName" \
+		-v "${sysbox_runc_path}"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.options.BinaryName" \
+		-v "${sysbox_runc_path}"
+	dasel put bool -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.options.SystemdCgroup" \
+		-v true
+	dasel put bool -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.options.SystemdCgroup" \
+		-v true
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.pod_annotations.[0]" \
+		-v "sysbox/rootfs-rw-layer"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.pod_annotations.[0]" \
+		-v "sysbox/rootfs-rw-layer"
 
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
 		dasel put string -f "${host_containerd_conf_file}" -p toml \
 			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.snapshotter" \
+			-v "sysbox"
+		dasel put string -f "${host_containerd_conf_file}" -p toml \
+			-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.snapshotter" \
 			-v "sysbox"
 
 		dasel put string -f "${host_containerd_conf_file}" -p toml \
@@ -759,6 +775,8 @@ function config_containerd_for_sysbox() {
 	else
 		dasel delete -f "${host_containerd_conf_file}" -p toml \
 			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.snapshotter" >/dev/null 2>&1 || true
+		dasel delete -f "${host_containerd_conf_file}" -p toml \
+			-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.snapshotter" >/dev/null 2>&1 || true
 		dasel delete -f "${host_containerd_conf_file}" -p toml \
 			-s "proxy_plugins.sysbox" >/dev/null 2>&1 || true
 	fi
@@ -778,6 +796,8 @@ function unconfig_containerd_for_sysbox() {
 			# Delete the entire sysbox-runc runtime section using dasel
 			dasel delete -f "${host_containerd_conf_file}" -p toml \
 				-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc"
+			dasel delete -f "${host_containerd_conf_file}" -p toml \
+				-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc" >/dev/null 2>&1 || true
 			dasel delete -f "${host_containerd_conf_file}" -p toml \
 				-s "proxy_plugins.sysbox" >/dev/null 2>&1 || true
 
@@ -865,6 +885,7 @@ ${proxy_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
+  pod_annotations = ["sysbox/rootfs-rw-layer"]
 ${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
@@ -893,6 +914,12 @@ function config_k3s_containerd_for_sysbox() {
 	if [ ! -f "${host_k3s_containerd_conf_template}" ]; then
 		write_default_k3s_containerd_template "${sysbox_runc_path}"
 	elif grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
+		if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "pod_annotations"; then
+			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*pod_annotations = .*@  pod_annotations = ["sysbox/rootfs-rw-layer"]@' "${host_k3s_containerd_conf_template}"
+		else
+			sed -i "/runtimes.sysbox-runc]/a \  pod_annotations = [\"sysbox/rootfs-rw-layer\"]" "${host_k3s_containerd_conf_template}"
+		fi
+
 		if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
 			if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "snapshotter"; then
 				sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*snapshotter = .*@  snapshotter = "sysbox"@' "${host_k3s_containerd_conf_template}"
@@ -955,6 +982,7 @@ EOF
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
+  pod_annotations = ["sysbox/rootfs-rw-layer"]
 ${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
