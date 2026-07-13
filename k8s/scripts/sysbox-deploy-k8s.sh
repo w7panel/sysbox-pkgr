@@ -309,7 +309,6 @@ function copy_sysbox_to_host() {
 	cp "${artifacts_dir}/sysbox-mgr" "${host_bin}/sysbox-mgr"
 	cp "${artifacts_dir}/sysbox-fs" "${host_bin}/sysbox-fs"
 	cp "${artifacts_dir}/sysbox-runc" "${host_bin}/sysbox-runc"
-	cp "${artifacts_dir}/sysbox-admission" "${host_bin}/sysbox-admission"
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
 		cp "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
 	fi
