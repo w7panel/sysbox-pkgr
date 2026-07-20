@@ -81,6 +81,8 @@ RUN git clone --branch k5.4 https://github.com/nestybox/shiftfs-dkms.git /opt/sh
 
 COPY bin/sysbox-ce /opt/sysbox/bin
 
+RUN ln -s /opt/sysbox/bin/generic/sysbox-admission /usr/local/bin/sysbox-admission
+
 COPY systemd/50-sysbox-mod.conf /opt/sysbox/systemd/50-sysbox-mod.conf
 COPY systemd/99-sysbox-sysctl.conf /opt/sysbox/systemd/99-sysbox-sysctl.conf
 COPY systemd/sysbox-installer-helper.service /opt/sysbox/systemd/sysbox-installer-helper.service
