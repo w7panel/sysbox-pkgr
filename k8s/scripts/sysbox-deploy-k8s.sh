@@ -287,7 +287,8 @@ function get_artifacts_dir() {
 
 	local distro=$os_distro_release
 
-	if [[ "$distro" == "ubuntu-24.04" ]] ||
+	if [[ "$distro" == "ubuntu-26.04" ]] ||
+		[[ "$distro" == "ubuntu-24.04" ]] ||
 		[[ "$distro" == "ubuntu-22.04" ]] ||
 		[[ "$distro" == "ubuntu-21.10" ]] ||
 		[[ "$distro" == "ubuntu-20.04" ]] ||
