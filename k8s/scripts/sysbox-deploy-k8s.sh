@@ -750,8 +750,14 @@ function config_containerd_for_sysbox() {
 		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.pod_annotations.[0]" \
 		-v "sysbox/rootfs-rw-layer"
 	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.pod_annotations.[1]" \
+		-v "sysbox/persistent-special-mounts"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
 		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.pod_annotations.[0]" \
 		-v "sysbox/rootfs-rw-layer"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.pod_annotations.[1]" \
+		-v "sysbox/persistent-special-mounts"
 
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
 		dasel put string -f "${host_containerd_conf_file}" -p toml \
@@ -885,7 +891,7 @@ ${proxy_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
-  pod_annotations = ["sysbox/rootfs-rw-layer"]
+  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/persistent-special-mounts"]
 ${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
@@ -915,9 +921,9 @@ function config_k3s_containerd_for_sysbox() {
 		write_default_k3s_containerd_template "${sysbox_runc_path}"
 	elif grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
 		if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "pod_annotations"; then
-			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*pod_annotations = .*@  pod_annotations = ["sysbox/rootfs-rw-layer"]@' "${host_k3s_containerd_conf_template}"
+			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*pod_annotations = .*@  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/persistent-special-mounts"]@' "${host_k3s_containerd_conf_template}"
 		else
-			sed -i "/runtimes.sysbox-runc]/a \  pod_annotations = [\"sysbox/rootfs-rw-layer\"]" "${host_k3s_containerd_conf_template}"
+			sed -i "/runtimes.sysbox-runc]/a \  pod_annotations = [\"sysbox/rootfs-rw-layer\", \"sysbox/persistent-special-mounts\"]" "${host_k3s_containerd_conf_template}"
 		fi
 
 		if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
@@ -982,7 +988,7 @@ EOF
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
-  pod_annotations = ["sysbox/rootfs-rw-layer"]
+  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/persistent-special-mounts"]
 ${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
