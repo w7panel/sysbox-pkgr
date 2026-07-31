@@ -41,9 +41,11 @@ GO_IMAGE=$(GO_BASE_IMAGE):$(GO_VERSION)
 # UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu
 # DOCKER_APT_MIRROR=https://mirrors.aliyun.com/docker-ce/linux/ubuntu
 # GOPROXY=https://goproxy.cn,direct
+# GITHUB_PROXY=https://gh-proxy.org/
 UBUNTU_MIRROR?=http://archive.ubuntu.com/ubuntu
 DOCKER_APT_MIRROR?=https://download.docker.com/linux/ubuntu
 GOPROXY?=https://proxy.golang.org,direct
+GITHUB_PROXY?=https://gh-proxy.org/
 
 # Sysbox source-code locations.
 ifeq ($(EDITION),ce)
@@ -77,6 +79,7 @@ DOCKER_BUILD=docker build                              \
 	--build-arg UBUNTU_MIRROR=$(UBUNTU_MIRROR)         \
 	--build-arg DOCKER_APT_MIRROR=$(DOCKER_APT_MIRROR) \
 	--build-arg GOPROXY=$(GOPROXY)                     \
+	--build-arg GITHUB_PROXY=$(GITHUB_PROXY)           \
 	-t build-$@/$(ARCH)                                \
 	-f $(CURDIR)/$@/Dockerfile .
 
@@ -97,6 +100,7 @@ DOCKER_BUILD_RELEASE=docker build                                \
 	--build-arg UBUNTU_MIRROR=$(UBUNTU_MIRROR)                   \
 	--build-arg DOCKER_APT_MIRROR=$(DOCKER_APT_MIRROR)           \
 	--build-arg GOPROXY=$(GOPROXY)                               \
+	--build-arg GITHUB_PROXY=$(GITHUB_PROXY)                     \
 	-t build-$(RELEASE_BASELINE_IMAGE)/$(ARCH)                   \
 	-f $(CURDIR)/$(RELEASE_BASELINE_IMAGE)/Dockerfile .
 

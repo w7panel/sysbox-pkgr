@@ -5,9 +5,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 # ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu
 # ARG DOCKER_APT_MIRROR=https://mirrors.aliyun.com/docker-ce/linux/ubuntu
 # ARG GOPROXY=https://goproxy.cn,direct
+# ARG GITHUB_PROXY=https://gh-proxy.org/
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
 ARG DOCKER_APT_MIRROR=https://download.docker.com/linux/ubuntu
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG GITHUB_PROXY=https://gh-proxy.org/
 
 FROM ${GO_IMAGE} as golang
 
@@ -16,6 +18,7 @@ FROM ${BASE_IMAGE}
 ARG UBUNTU_MIRROR
 ARG DOCKER_APT_MIRROR
 ARG GOPROXY
+ARG GITHUB_PROXY
 
 RUN sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g; s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list
 
@@ -76,13 +79,11 @@ RUN go env -w GONOSUMDB=github.com/nestybox
 RUN if [ "${arch}" = "amd64" ]; then arch_str="x86_64"; \
     elif [ "${arch}" = "arm64" ]; then arch_str="aarch_64"; \
     else echo "Unsupported platform: ${arch}"; exit; fi \
-    && curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-${arch_str}.zip \
+    && curl -LO "${GITHUB_PROXY}https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-${arch_str}.zip" \
     && unzip protoc-3.15.8-linux-${arch_str}.zip -d $HOME/.local \
     && export PATH="$PATH:$HOME/.local/bin" \
     && go install github.com/golang/protobuf/protoc-gen-go@latest \
     && export PATH="$PATH:$(go env GOPATH)/bin"
-# China mirror alternative:
-# RUN curl -LO https://gh-proxy.org/https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-${arch_str}.zip
 
 # Install Docker
 RUN install -m 0755 -d /etc/apt/keyrings \
@@ -94,9 +95,8 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
-ADD https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/bash/docker /etc/bash_completion.d/docker.sh
-# China mirror alternative:
-# ADD https://gh-proxy.org/https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/bash/docker /etc/bash_completion.d/docker.sh
+RUN curl -fsSL "${GITHUB_PROXY}https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/bash/docker" \
+    -o /etc/bash_completion.d/docker.sh
 
 # Use the old definition for SECCOMP_NOTIF_ID_VALID in /usr/include/linux/seccomp.h
 #
