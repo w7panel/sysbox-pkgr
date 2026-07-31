@@ -307,16 +307,28 @@ function copy_sysbox_to_host() {
 
 	local artifacts_dir=$(get_artifacts_dir)
 
-	cp "${artifacts_dir}/sysbox-mgr" "${host_bin}/sysbox-mgr"
-	cp "${artifacts_dir}/sysbox-fs" "${host_bin}/sysbox-fs"
-	cp "${artifacts_dir}/sysbox-runc" "${host_bin}/sysbox-runc"
+	# Replace binaries atomically. A direct cp can fail with ETXTBSY while the
+	# current executable is mapped by a running Sysbox service.
+	install_host_binary "${artifacts_dir}/sysbox-mgr" "${host_bin}/sysbox-mgr"
+	install_host_binary "${artifacts_dir}/sysbox-fs" "${host_bin}/sysbox-fs"
+	install_host_binary "${artifacts_dir}/sysbox-runc" "${host_bin}/sysbox-runc"
+	install_host_binary "${artifacts_dir}/sysbox-admission" "${host_bin}/sysbox-admission"
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
-		cp "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
+		install_host_binary "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
 	fi
 
 	# Keep track of the sysbox version installed on the host (upgrade purposes).
 	echo "${sysbox_version}" >${host_var_lib_sysbox_deploy_k8s}/sysbox_installed_version
 	echo "${sysbox_snapshotter_enabled}" >${host_var_lib_sysbox_deploy_k8s}/sysbox_snapshotter_enabled
+}
+
+function install_host_binary() {
+	local source="$1"
+	local destination="$2"
+	local temporary="${destination}.new.$$"
+
+	install -m 0755 "${source}" "${temporary}"
+	mv -f "${temporary}" "${destination}"
 }
 
 function rm_sysbox_from_host() {
