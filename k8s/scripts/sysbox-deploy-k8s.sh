@@ -30,10 +30,24 @@ set -o errexit
 set -o pipefail
 set -o nounset
 
+# --inner-k3s-* is an experimental command-mode path for a K3s process that
+# runs inside a Sysbox container. It does not install anything on the host.
+function prepare_inner_k3s_sysbox() {
+	local launcher="${SYSBOX_INNER_LAUNCHER:-/opt/sysbox/scripts/sysbox-inner-k3s.sh}"
+	[[ -r "${launcher}" ]] || die "inner K3s launcher is missing: ${launcher}"
+	/bin/sh "${launcher}"
+}
+
 # The Sysbox edition to install: Sysbox (CE) or Sysbox-EE.
 sysbox_edition=""
 # The Sysbox version to install; append "-0" if it doesn't have a patch number.
-sysbox_version=$(echo "$SYSBOX_VERSION" | sed '/-[0-9]/!s/.*/&-0/')
+if [[ "${1:-}" == "--inner-k3s-prepare" || "${1:-}" == "--inner-k3s-run" ]]; then
+	sysbox_version=""
+else
+	# Preserve the normal installer's required-variable behavior. Only the
+	# experimental inner command path can run without a package version.
+	sysbox_version=$(echo "$SYSBOX_VERSION" | sed '/-[0-9]/!s/.*/&-0/')
+fi
 
 # Optional extra arguments for the Sysbox systemd units.
 SYSBOX_MGR_CONFIG="${SYSBOX_MGR_CONFIG:-}"
@@ -720,6 +734,7 @@ function unconfig_crio_for_sysbox() {
 
 function config_containerd_for_sysbox() {
 	echo "Adding Sysbox to containerd config ..."
+	local annotations=("sysbox/rootfs-rw-layer" "sysbox/volume-init" "sysbox/allow-proc-exec")
 
 	# Backup the original containerd config if not already backed up
 	if [ ! -f "${host_containerd_conf_file_backup}" ]; then
@@ -766,6 +781,16 @@ function config_containerd_for_sysbox() {
 	dasel put string -f "${host_containerd_conf_file}" -p toml \
 		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.pod_annotations.[1]" \
 		-v "sysbox/volume-init"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.pod_annotations.[2]" \
+		-v "sysbox/allow-proc-exec"
+	dasel delete -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.container_annotations" >/dev/null 2>&1 || true
+	for i in 0 1 2; do
+		dasel put string -f "${host_containerd_conf_file}" -p toml \
+			-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc.container_annotations.[${i}]" \
+			-v "${annotations[${i}]}"
+	done
 	dasel delete -f "${host_containerd_conf_file}" -p toml \
 		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.pod_annotations" >/dev/null 2>&1 || true
 	dasel put string -f "${host_containerd_conf_file}" -p toml \
@@ -774,6 +799,16 @@ function config_containerd_for_sysbox() {
 	dasel put string -f "${host_containerd_conf_file}" -p toml \
 		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.pod_annotations.[1]" \
 		-v "sysbox/volume-init"
+	dasel put string -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.pod_annotations.[2]" \
+		-v "sysbox/allow-proc-exec"
+	dasel delete -f "${host_containerd_conf_file}" -p toml \
+		-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.container_annotations" >/dev/null 2>&1 || true
+	for i in 0 1 2; do
+		dasel put string -f "${host_containerd_conf_file}" -p toml \
+			-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc.container_annotations.[${i}]" \
+			-v "${annotations[${i}]}"
+	done
 
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
 		dasel put string -f "${host_containerd_conf_file}" -p toml \
@@ -907,7 +942,8 @@ ${proxy_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init"]
+  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/allow-proc-exec"]
+  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/allow-proc-exec"]
 ${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
@@ -937,9 +973,14 @@ function config_k3s_containerd_for_sysbox() {
 		write_default_k3s_containerd_template "${sysbox_runc_path}"
 	elif grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
 		if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "pod_annotations"; then
-			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*pod_annotations = .*@  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init"]@' "${host_k3s_containerd_conf_template}"
+			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*pod_annotations = .*@  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/allow-proc-exec"]@' "${host_k3s_containerd_conf_template}"
 		else
-			sed -i "/runtimes.sysbox-runc]/a \  pod_annotations = [\"sysbox/rootfs-rw-layer\", \"sysbox/volume-init\"]" "${host_k3s_containerd_conf_template}"
+			sed -i "/runtimes.sysbox-runc]/a \  pod_annotations = [\"sysbox/rootfs-rw-layer\", \"sysbox/volume-init\", \"sysbox/allow-proc-exec\"]" "${host_k3s_containerd_conf_template}"
+		fi
+		if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "container_annotations"; then
+			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*container_annotations = .*@  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/allow-proc-exec"]@' "${host_k3s_containerd_conf_template}"
+		else
+			sed -i "/runtimes.sysbox-runc]/a \  container_annotations = [\"sysbox/rootfs-rw-layer\", \"sysbox/volume-init\", \"sysbox/allow-proc-exec\"]" "${host_k3s_containerd_conf_template}"
 		fi
 
 		if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
@@ -1004,7 +1045,8 @@ EOF
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init"]
+  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/allow-proc-exec"]
+  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/allow-proc-exec"]
 ${snapshotter_config}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
@@ -1043,6 +1085,8 @@ function die() {
 
 function print_usage() {
 	echo "Usage: $0 [ce|ee] [install|cleanup] [--snapshotter-enabled=true|false]"
+	echo "       $0 --inner-k3s-prepare"
+	echo "       $0 --inner-k3s-run -- <k3s command>"
 }
 
 function parse_bool_arg() {
@@ -1829,5 +1873,19 @@ function main() {
 
 	sleep infinity
 }
+
+case "${1:-}" in
+	--inner-k3s-prepare)
+		prepare_inner_k3s_sysbox
+		exit 0
+		;;
+	--inner-k3s-run)
+		shift
+		[[ "${1:-}" == "--" ]] && shift
+		[[ "$#" -gt 0 ]] || die "inner K3s command is required"
+		prepare_inner_k3s_sysbox
+		exec "$@"
+		;;
+esac
 
 main "$@"

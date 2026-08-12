@@ -20,6 +20,24 @@
 ARG BASE_IMAGE=ghcr.io/nestybox/centos7/systemd
 # China mirror alternative:
 # ARG BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd
+
+FROM alpine:3.20 AS rsync-builder
+
+RUN apk add --no-cache build-base wget \
+    && wget -qO- https://download.samba.org/pub/rsync/src/rsync-3.4.1.tar.gz | tar -xz -C /tmp \
+    && cd /tmp/rsync-3.4.1 \
+    && ./configure --disable-openssl --disable-xxhash --disable-zstd --disable-lz4 \
+    && make LDFLAGS=-static \
+    && strip rsync
+
+FROM alpine:3.20 AS fuse3-builder
+
+RUN apk add --no-cache build-base linux-headers meson ninja wget \
+    && wget -qO- https://gh-proxy.org/https://github.com/libfuse/libfuse/releases/download/fuse-3.18.2/fuse-3.18.2.tar.gz | tar -xz -C /tmp \
+    && cd /tmp/fuse-3.18.2 \
+    && meson setup build -Ddefault_library=static -Dc_link_args=-static \
+    && ninja -C build util/fusermount3
+
 FROM ${BASE_IMAGE}
 
 ARG sys_arch
@@ -75,6 +93,8 @@ RUN git clone --branch k5.4 "${GITHUB_PROXY}https://github.com/nestybox/shiftfs-
 #
 
 COPY bin/sysbox-ce /opt/sysbox/bin
+COPY --from=rsync-builder /tmp/rsync-3.4.1/rsync /opt/sysbox/bin/generic/rsync
+COPY --from=fuse3-builder /tmp/fuse-3.18.2/build/util/fusermount3 /opt/sysbox/bin/generic/fusermount3
 
 RUN ln -s /opt/sysbox/bin/generic/sysbox-admission /usr/local/bin/sysbox-admission
 
@@ -88,5 +108,6 @@ COPY systemd/sysbox-snapshotter.service /opt/sysbox/systemd/sysbox-snapshotter.s
 COPY systemd/sysbox.service /opt/sysbox/systemd/sysbox.service
 
 COPY scripts/sysbox-deploy-k8s.sh /opt/sysbox/scripts/sysbox-deploy-k8s.sh
+COPY scripts/sysbox-inner-k3s.sh /opt/sysbox/scripts/sysbox-inner-k3s.sh
 COPY scripts/sysbox-installer-helper.sh /opt/sysbox/scripts/sysbox-installer-helper.sh
 COPY scripts/sysbox-removal-helper.sh /opt/sysbox/scripts/sysbox-removal-helper.sh
