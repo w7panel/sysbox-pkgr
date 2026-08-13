@@ -105,6 +105,7 @@ fi
 # neither component reads or modifies the outer container's subuid files.
 cat >"$bin_dir/sysbox-runc-inner" <<EOF
 #!/bin/sh
+export SYSBOX_ALLOW_PROC_EXEC=true
 exec "$bin_dir/sysbox-runc" --mapping-mode nested-identity --log /var/log/sysbox-runc-inner.log --log-format json "\$@"
 EOF
 chmod 0755 "$bin_dir/sysbox-runc-inner"
@@ -155,8 +156,8 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/skip-special-mounts"]
-  container_annotations = ["sysbox/skip-special-mounts"]
+  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
+  container_annotations = ["sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
   SystemdCgroup = false
@@ -165,8 +166,8 @@ state = "/run/k3s/containerd"
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-inner]
   runtime_type = "io.containerd.runc.v2"
   snapshotter = "sysbox"
-  pod_annotations = ["sysbox/rootfs-rw-layer"]
-  container_annotations = ["sysbox/rootfs-rw-layer"]
+  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/allow-proc-exec"]
+  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/allow-proc-exec"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-inner.options]
   SystemdCgroup = false
