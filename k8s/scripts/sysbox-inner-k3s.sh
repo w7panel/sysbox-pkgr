@@ -5,7 +5,7 @@ set -eu
 
 bin_dir="${SYSBOX_INNER_BIN_DIR:-/opt/sysbox/bin/generic}"
 config_template="${K3S_CONTAINERD_CONFIG_TEMPLATE:-/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl}"
-data_root="${SYSBOX_INNER_DATA_ROOT:-/var/lib/sysbox-inner}"
+data_root="${SYSBOX_INNER_DATA_ROOT:-/var/lib/rancher/k3s/sysbox-inner}"
 fs_mountpoint="${SYSBOX_INNER_FS_MOUNTPOINT:-/var/lib/sysboxfs-inner}"
 snapshotter_socket="${SYSBOX_INNER_SNAPSHOTTER_SOCKET:-/run/sysbox-snapshotter.sock}"
 snapshotter_root="${SYSBOX_INNER_SNAPSHOTTER_ROOT:-/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.sysbox}"
