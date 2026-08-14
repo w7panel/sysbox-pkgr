@@ -156,20 +156,11 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
+  snapshotter = "sysbox"
   pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
-  container_annotations = ["sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
+  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
-  SystemdCgroup = false
-  BinaryName = "$bin_dir/sysbox-runc"
-
-[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-inner]
-  runtime_type = "io.containerd.runc.v2"
-  snapshotter = "sysbox"
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/allow-proc-exec"]
-  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/allow-proc-exec"]
-
-[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-inner.options]
   SystemdCgroup = false
   BinaryName = "$bin_dir/sysbox-runc-inner"
 
@@ -177,15 +168,54 @@ state = "/run/k3s/containerd"
   config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
 EOF
 
+if [ "${SYSBOX_INNER_START_DAEMONS:-true}" != "true" ]; then
+	exit 0
+fi
+
+managed_pids=
+managed_sockets=
 if [ ! -S /run/sysbox/sysmgr.sock ]; then
 	"$bin_dir/sysbox-mgr" --mapping-mode nested-identity --disable-inner-image-preload --disable-idmapped-mount --disable-ovfs-on-idmapped-mount --data-root "$data_root" >/var/log/sysbox-mgr.log 2>&1 &
-	wait_for_socket "$!" /run/sysbox/sysmgr.sock /var/log/sysbox-mgr.log
+	pid=$!
+	managed_pids="$managed_pids $pid"
+	managed_sockets="$managed_sockets /run/sysbox/sysmgr.sock"
+	wait_for_socket "$pid" /run/sysbox/sysmgr.sock /var/log/sysbox-mgr.log
 fi
 if [ ! -S /run/sysbox/sysfs.sock ]; then
 	"$bin_dir/sysbox-fs" --mountpoint "$fs_mountpoint" >/var/log/sysbox-fs.log 2>&1 &
-	wait_for_socket "$!" /run/sysbox/sysfs.sock /var/log/sysbox-fs.log
+	pid=$!
+	managed_pids="$managed_pids $pid"
+	managed_sockets="$managed_sockets /run/sysbox/sysfs.sock"
+	wait_for_socket "$pid" /run/sysbox/sysfs.sock /var/log/sysbox-fs.log
 fi
 if [ ! -S "$snapshotter_socket" ]; then
 	"$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket" >/var/log/sysbox-snapshotter.log 2>&1 &
-	wait_for_socket "$!" "$snapshotter_socket" /var/log/sysbox-snapshotter.log
+	pid=$!
+	managed_pids="$managed_pids $pid"
+	managed_sockets="$managed_sockets $snapshotter_socket"
+	wait_for_socket "$pid" "$snapshotter_socket" /var/log/sysbox-snapshotter.log
+fi
+
+if [ "${SYSBOX_INNER_KEEPALIVE:-false}" = "true" ]; then
+	cleanup() {
+		status=$?
+		trap - EXIT TERM INT
+		for pid in $managed_pids; do
+			kill "$pid" 2>/dev/null || true
+		done
+		wait 2>/dev/null || true
+		for socket in $managed_sockets; do
+			rm -f "$socket"
+		done
+		exit "$status"
+	}
+	trap cleanup EXIT
+	trap 'exit 0' TERM INT
+	while :; do
+		for pid in $managed_pids; do
+			kill -0 "$pid" 2>/dev/null || die "managed Sysbox daemon exited"
+		done
+		sleep 5 &
+		wait $!
+	done
 fi

@@ -23,7 +23,8 @@ ARG BASE_IMAGE=ghcr.io/nestybox/centos7/systemd
 
 FROM alpine:3.20 AS rsync-builder
 
-RUN apk add --no-cache build-base wget \
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories \
+    && apk add --no-cache build-base wget \
     && wget -qO- https://download.samba.org/pub/rsync/src/rsync-3.4.1.tar.gz | tar -xz -C /tmp \
     && cd /tmp/rsync-3.4.1 \
     && ./configure --disable-openssl --disable-xxhash --disable-zstd --disable-lz4 \
@@ -32,7 +33,8 @@ RUN apk add --no-cache build-base wget \
 
 FROM alpine:3.20 AS fuse3-builder
 
-RUN apk add --no-cache build-base linux-headers meson ninja wget \
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories \
+    && apk add --no-cache build-base linux-headers meson ninja wget \
     && wget -qO- https://gh-proxy.org/https://github.com/libfuse/libfuse/releases/download/fuse-3.18.2/fuse-3.18.2.tar.gz | tar -xz -C /tmp \
     && cd /tmp/fuse-3.18.2 \
     && meson setup build -Ddefault_library=static -Dc_link_args=-static \
@@ -51,10 +53,11 @@ ARG CRICTL_VERSION="v1.35.0"
 ARG GITHUB_PROXY="https://gh-proxy.org/"
 
 RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* \
-    && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+    && sed -i 's|#baseurl=http://mirror.centos.org/centos/$releasever|baseurl=https://mirrors.aliyun.com/centos-vault/7.9.2009|g' /etc/yum.repos.d/CentOS-*
 
 RUN yum install -y curl wget git bc which epel-release \
-    && yum install -y jq
+    && sed -i 's|^metalink=|#metalink=|g; s|^#baseurl=https\?://download.fedoraproject.org/pub/epel/|baseurl=https://archives.fedoraproject.org/pub/archive/epel/|g' /etc/yum.repos.d/epel.repo \
+    && yum install -y fuse-overlayfs iptables jq
 
 # China mirror alternative for EPEL:
 # RUN sed -i 's|^metalink=|#metalink=|g; s|^mirrorlist=|#mirrorlist=|g; s|^#baseurl=http://download.fedoraproject.org/pub/epel/|baseurl=https://mirrors.aliyun.com/epel/|g' /etc/yum.repos.d/epel.repo
@@ -109,5 +112,6 @@ COPY systemd/sysbox.service /opt/sysbox/systemd/sysbox.service
 
 COPY scripts/sysbox-deploy-k8s.sh /opt/sysbox/scripts/sysbox-deploy-k8s.sh
 COPY scripts/sysbox-inner-k3s.sh /opt/sysbox/scripts/sysbox-inner-k3s.sh
+COPY scripts/sysbox-nested-agent.sh /opt/sysbox/scripts/sysbox-nested-agent.sh
 COPY scripts/sysbox-installer-helper.sh /opt/sysbox/scripts/sysbox-installer-helper.sh
 COPY scripts/sysbox-removal-helper.sh /opt/sysbox/scripts/sysbox-removal-helper.sh

@@ -1083,6 +1083,21 @@ function die() {
 	exit 1
 }
 
+# The host installer writes systemd units and restarts the target node's
+# container runtime. Never allow that path to run from an L1 Sysbox container;
+# it must use the dedicated nested agent instead. The initial user namespace is
+# represented by one identity mapping covering every usable uid_t value.
+function is_initial_userns() {
+	local map_lines=()
+	local container_id host_id length extra
+
+	mapfile -t map_lines </proc/self/uid_map || return 1
+	[[ "${#map_lines[@]}" -eq 1 ]] || return 1
+	read -r container_id host_id length extra <<<"${map_lines[0]}"
+	[[ -z "${extra:-}" ]] || return 1
+	[[ "${container_id}" == "0" && "${host_id}" == "0" && "${length}" == "4294967295" ]]
+}
+
 function print_usage() {
 	echo "Usage: $0 [ce|ee] [install|cleanup] [--snapshotter-enabled=true|false]"
 	echo "       $0 --inner-k3s-prepare"
@@ -1637,6 +1652,9 @@ function main() {
 	euid=$(id -u)
 	if [[ $euid -ne 0 ]]; then
 		die "This script must be run as root"
+	fi
+	if ! is_initial_userns; then
+		die "host installation is forbidden outside the initial user namespace; use installMode=nested"
 	fi
 
 	os_distro_release=$(get_host_distro)
