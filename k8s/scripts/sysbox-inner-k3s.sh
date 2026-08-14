@@ -18,13 +18,28 @@ die() {
 	exit 1
 }
 
+socket_is_live() {
+	socket=$1
+	[ -S "$socket" ] && grep -Fq " $socket" /proc/net/unix
+}
+
+remove_stale_socket() {
+	socket=$1
+	if [ -e "$socket" ] && [ ! -S "$socket" ]; then
+		die "refusing to replace non-socket path: $socket"
+	fi
+	if [ -S "$socket" ] && ! socket_is_live "$socket"; then
+		rm -f "$socket"
+	fi
+}
+
 wait_for_socket() {
 	pid=$1
 	socket=$2
 	log=$3
 	i=0
 	while [ "$i" -lt 30 ]; do
-		[ -S "$socket" ] && return 0
+		socket_is_live "$socket" && return 0
 		kill -0 "$pid" 2>/dev/null || die "Sysbox daemon exited; see $log"
 		i=$((i + 1))
 		sleep 1
@@ -174,21 +189,25 @@ fi
 
 managed_pids=
 managed_sockets=
-if [ ! -S /run/sysbox/sysmgr.sock ]; then
+required_sockets="/run/sysbox/sysmgr.sock /run/sysbox/sysfs.sock $snapshotter_socket"
+for socket in $required_sockets; do
+	remove_stale_socket "$socket"
+done
+if ! socket_is_live /run/sysbox/sysmgr.sock; then
 	"$bin_dir/sysbox-mgr" --mapping-mode nested-identity --disable-inner-image-preload --disable-idmapped-mount --disable-ovfs-on-idmapped-mount --data-root "$data_root" >/var/log/sysbox-mgr.log 2>&1 &
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets /run/sysbox/sysmgr.sock"
 	wait_for_socket "$pid" /run/sysbox/sysmgr.sock /var/log/sysbox-mgr.log
 fi
-if [ ! -S /run/sysbox/sysfs.sock ]; then
+if ! socket_is_live /run/sysbox/sysfs.sock; then
 	"$bin_dir/sysbox-fs" --mountpoint "$fs_mountpoint" >/var/log/sysbox-fs.log 2>&1 &
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets /run/sysbox/sysfs.sock"
 	wait_for_socket "$pid" /run/sysbox/sysfs.sock /var/log/sysbox-fs.log
 fi
-if [ ! -S "$snapshotter_socket" ]; then
+if ! socket_is_live "$snapshotter_socket"; then
 	"$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket" >/var/log/sysbox-snapshotter.log 2>&1 &
 	pid=$!
 	managed_pids="$managed_pids $pid"
@@ -214,6 +233,9 @@ if [ "${SYSBOX_INNER_KEEPALIVE:-false}" = "true" ]; then
 	while :; do
 		for pid in $managed_pids; do
 			kill -0 "$pid" 2>/dev/null || die "managed Sysbox daemon exited"
+		done
+		for socket in $required_sockets; do
+			socket_is_live "$socket" || die "Sysbox daemon socket is not live: $socket"
 		done
 		sleep 5 &
 		wait $!
