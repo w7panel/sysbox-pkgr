@@ -80,8 +80,7 @@ launcher_pid=$!
 
 echo "Waiting for K3s containerd to load $runtime_name with BinaryName=$runtime_binary and snapshotter=sysbox; for first-time migration, roll-recreate the L1 K3s Pod from L0 (no physical-host reboot)."
 while kill -0 "$launcher_pid" 2>/dev/null; do
-	if crictl --runtime-endpoint "unix://$containerd_socket" info 2>/dev/null |
-		runtime_loaded "$runtime_binary"; then
+	if runtime_loaded "$runtime_binary"; then
 		if kubectl label node "$NODE_NAME" "$ready_label=ready" --overwrite >/dev/null; then
 			touch /run/sysbox/nested-runtime-ready
 			wait "$launcher_pid"
