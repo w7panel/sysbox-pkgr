@@ -21,10 +21,11 @@ ARG BASE_IMAGE=ghcr.io/nestybox/centos7/systemd
 # China mirror alternative:
 # ARG BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd
 
-FROM alpine:3.20 AS rsync-builder
+FROM debian:bookworm-slim AS rsync-builder
 
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories \
-    && apk add --no-cache build-base wget \
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates libacl1-dev libattr1-dev wget \
     && wget -qO- https://download.samba.org/pub/rsync/src/rsync-3.4.1.tar.gz | tar -xz -C /tmp \
     && cd /tmp/rsync-3.4.1 \
     && ./configure --disable-openssl --disable-xxhash --disable-zstd --disable-lz4 \

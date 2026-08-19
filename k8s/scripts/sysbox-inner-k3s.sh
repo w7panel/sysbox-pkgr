@@ -4,6 +4,7 @@
 set -eu
 
 bin_dir="${SYSBOX_INNER_BIN_DIR:-/opt/sysbox/bin/generic}"
+host_root="${SYSBOX_INNER_HOST_ROOT:-/}"
 config_template="${K3S_CONTAINERD_CONFIG_TEMPLATE:-/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl}"
 data_root="${SYSBOX_INNER_DATA_ROOT:-/var/lib/rancher/k3s/sysbox-inner}"
 fs_mountpoint="${SYSBOX_INNER_FS_MOUNTPOINT:-/var/lib/sysboxfs-inner}"
@@ -92,8 +93,9 @@ exec fuse-overlayfs -o "$options" "$target"
 EOF
 	chmod 0755 "$bin_dir/mount.fuse3"
 fi
-mkdir -p /usr/local/bin
-ln -sf "$bin_dir/mount.fuse3" /usr/local/bin/mount.fuse3
+mkdir -p "$host_root/usr/local/bin"
+ln -sf "$bin_dir/mount.fuse3" "$host_root/usr/local/bin/mount.fuse3"
+ln -sf "$bin_dir/rsync" "$host_root/usr/local/bin/rsync"
 
 mkdir -p /run/sysbox "$data_root" "$fs_mountpoint" "$snapshotter_root" "$(dirname "$config_template")"
 # The outer PoC node can reserve a large fraction of its disk. Keep the inner
@@ -112,9 +114,9 @@ evictionMinimumReclaim:
 EOF
 # rancher/k3s images expose only PRETTY_NAME in /etc/os-release. Sysbox needs
 # an ID to select the generic kernel-header path.
-if ! grep -q '^ID=' /etc/os-release 2>/dev/null; then
-	mkdir -p /usr/lib
-	echo 'ID=k3s' >/usr/lib/os-release
+if ! grep -q '^ID=' "$host_root/etc/os-release" 2>/dev/null; then
+	mkdir -p "$host_root/usr/lib"
+	echo 'ID=k3s' >"$host_root/usr/lib/os-release"
 fi
 # The dedicated handler and manager must agree on the explicit identity mode;
 # neither component reads or modifies the outer container's subuid files.
@@ -146,8 +148,9 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.runtime']
   enable_selinux = false
-  enable_unprivileged_ports = true
-  enable_unprivileged_icmp = true
+  # L3 runtimes cannot write the outer /proc/sys tree from nested userns.
+  enable_unprivileged_ports = false
+  enable_unprivileged_icmp = false
   device_ownership_from_security_context = false
 
 [plugins.'io.containerd.cri.v1.runtime'.cni]
