@@ -86,6 +86,10 @@ function semver_ge() {
 }
 
 function install_package_deps() {
+	if grep -q '^ID="\?centos"\?$' /etc/os-release; then
+		dnf install -y rsync fuse3 fuse-overlayfs iptables
+		return
+	fi
 
 	# Need this to work-around "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem."
 	dpkg --configure -a
@@ -111,7 +115,11 @@ function install_shiftfs() {
 
 	echo "Installing Shiftfs ..."
 
-	apt-get install -y make dkms
+	if grep -q '^ID="\?centos"\?$' /etc/os-release; then
+		dnf install -y make dkms
+	else
+		apt-get install -y make dkms
+	fi
 	sh -c "cd $shiftfs_dkms && make -f Makefile.dkms"
 
 	if ! shiftfs_installed; then
@@ -119,7 +127,11 @@ function install_shiftfs() {
 		return
 	fi
 
-	apt-get remove --purge -y make dkms
+	if grep -q '^ID="\?centos"\?$' /etc/os-release; then
+		dnf remove -y make dkms
+	else
+		apt-get remove --purge -y make dkms
+	fi
 	echo "Shiftfs installation done."
 }
 
@@ -128,6 +140,10 @@ function shiftfs_installed() {
 }
 
 function shiftfs_needed() {
+	if grep -q '^ID="\?centos"\?$' /etc/os-release; then
+		return 1
+	fi
+
 	# shiftfs is not needed for kernels >= 5.19 where idmapped mounts are present
 	# and stable, but is still recommended if it is available. the max supported
 	# version for shiftfs is 6.2, so check against that here

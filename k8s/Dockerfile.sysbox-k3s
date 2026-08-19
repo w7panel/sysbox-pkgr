@@ -9,7 +9,7 @@
 #
 # docker build -t ghcr.io/nestybox/sysbox-deploy-k3s .
 # China mirror alternative:
-# docker build --build-arg BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd -t docker.cnb.cool/i0358/docker-images-chrom/sysbox-deploy-k3s .
+# docker build --build-arg BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/centos-centos:stream9 -t docker.cnb.cool/i0358/docker-images-chrom/sysbox-deploy-k3s .
 #
 
 # Note: we use a centos base image because it carries a systemctl that can
@@ -17,9 +17,7 @@
 # ubuntu + systemd image (systemctl can't not connect to the host's dbus, even
 # though the host's dbus socket was mounted into the container).
 
-ARG BASE_IMAGE=ghcr.io/nestybox/centos7/systemd
-# China mirror alternative:
-# ARG BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/nestybox-centos7-systemd
+ARG BASE_IMAGE=docker.cnb.cool/i0358/docker-images-chrom/centos-centos:stream9
 FROM ${BASE_IMAGE}
 
 ARG sys_arch
@@ -32,14 +30,8 @@ ARG KUBECTL_VERSION="1.32.13"
 ARG CRICTL_VERSION="v1.35.0"
 ARG GITHUB_PROXY="https://gh-proxy.org/"
 
-RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* \
-    && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
-
-RUN yum install -y curl wget git bc which epel-release \
-    && yum install -y jq
-
-# China mirror alternative for EPEL:
-# RUN sed -i 's|^metalink=|#metalink=|g; s|^mirrorlist=|#mirrorlist=|g; s|^#baseurl=http://download.fedoraproject.org/pub/epel/|baseurl=https://mirrors.aliyun.com/epel/|g' /etc/yum.repos.d/epel.repo
+RUN dnf install -y --allowerasing systemd curl wget git bc which jq procps-ng \
+    && dnf clean all
 
 RUN case "${SYS_ARCH}" in \
         amd64|arm64) kubectl_arch="${SYS_ARCH}" ;; \

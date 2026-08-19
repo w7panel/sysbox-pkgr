@@ -409,7 +409,7 @@ function rm_systemd_units_from_host() {
 function apply_sysbox_env_config() {
 	# Note: this requires CAP_SYS_ADMIN on the host
 	echo "Configuring host sysctls ..."
-	sysctl -p "${host_sysctl}/99-sysbox-sysctl.conf"
+	sysctl -p "${host_sysctl}/99-sysbox-sysctl.conf" || true
 }
 
 function start_sysbox() {
@@ -1086,7 +1086,7 @@ function get_container_runtime() {
 }
 
 function get_host_distro() {
-	local distro_name=$(grep -w "^ID" "$host_os_release" | cut -d "=" -f2)
+	local distro_name=$(grep -w "^ID" "$host_os_release" | cut -d "=" -f2 | tr -d '"')
 	local version_id=$(grep -w "^VERSION_ID" "$host_os_release" | cut -d "=" -f2 | tr -d '"')
 	echo "${distro_name}-${version_id}"
 }
@@ -1598,6 +1598,13 @@ function main() {
 	fi
 
 	os_distro_release=$(get_host_distro)
+	if [[ "$os_distro_release" == "centos-9" ]]; then
+		# CentOS Stream 9's systemctl cannot address the host bus from the
+		# installer container; execute service operations in the host namespace.
+		systemctl() {
+			nsenter -t 1 -m -u -i -n -p -- /proc/1/root/usr/bin/systemctl "$@"
+		}
+	fi
 	if ! is_supported_distro; then
 		echo "Warning: Sysbox is not officially supported on this host's distro ($os_distro_release)".
 	fi
