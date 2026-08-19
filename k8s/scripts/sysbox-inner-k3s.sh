@@ -8,7 +8,7 @@ host_root="${SYSBOX_INNER_HOST_ROOT:-/}"
 config_template="${K3S_CONTAINERD_CONFIG_TEMPLATE:-/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl}"
 data_root="${SYSBOX_INNER_DATA_ROOT:-/var/lib/rancher/k3s/sysbox-inner}"
 fs_mountpoint="${SYSBOX_INNER_FS_MOUNTPOINT:-/var/lib/sysboxfs-inner}"
-snapshotter_socket="${SYSBOX_INNER_SNAPSHOTTER_SOCKET:-/run/sysbox-snapshotter.sock}"
+snapshotter_socket="${SYSBOX_INNER_SNAPSHOTTER_SOCKET:-/run/sysbox/sysbox-snapshotter.sock}"
 snapshotter_root="${SYSBOX_INNER_SNAPSHOTTER_ROOT:-/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.sysbox}"
 containerd_socket="${K3S_CONTAINERD_SOCKET:-/run/k3s/containerd/containerd.sock}"
 pause_image="${K3S_PAUSE_IMAGE:-rancher/mirrored-pause:3.6}"
@@ -119,14 +119,20 @@ if ! grep -q '^ID=' "$host_root/etc/os-release" 2>/dev/null; then
 	echo 'ID=k3s' >"$host_root/usr/lib/os-release"
 fi
 # The dedicated handler and manager must agree on the explicit identity mode;
-# neither component reads or modifies the outer container's subuid files.
-cat >"$bin_dir/sysbox-runc-inner" <<EOF
+# neither component reads or modifies the outer container's subuid files. Keep
+# the wrapper distinct from the unmodified image binary and expose it through
+# the standard sysbox-runc handler (never a second RuntimeClass name).
+if [ ! -x "$bin_dir/sysbox-runc.real" ]; then
+	mv "$bin_dir/sysbox-runc" "$bin_dir/sysbox-runc.real"
+fi
+cat >"$bin_dir/sysbox-runc-nested" <<EOF
 #!/bin/sh
 export SYSBOX_ALLOW_PROC_EXEC=true
-exec "$bin_dir/sysbox-runc" --mapping-mode nested-identity --log /var/log/sysbox-runc-inner.log --log-format json "\$@"
+exec "$bin_dir/sysbox-runc.real" --mapping-mode nested-identity --log /var/log/sysbox-runc-nested.log --log-format json "\$@"
 EOF
-chmod 0755 "$bin_dir/sysbox-runc-inner"
+chmod 0755 "$bin_dir/sysbox-runc-nested"
 cat >"$config_template" <<EOF
+# Managed by Sysbox nested runtime. Remove only after the L1 Sysbox chart is uninstalled.
 version = 3
 imports = ["/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/*.toml"]
 root = "/var/lib/rancher/k3s/agent/containerd"
@@ -180,7 +186,7 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
   SystemdCgroup = false
-  BinaryName = "$bin_dir/sysbox-runc-inner"
+  BinaryName = "$bin_dir/sysbox-runc-nested"
 
 [plugins.'io.containerd.cri.v1.images'.registry]
   config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
@@ -211,11 +217,29 @@ if ! socket_is_live /run/sysbox/sysfs.sock; then
 	wait_for_socket "$pid" /run/sysbox/sysfs.sock /var/log/sysbox-fs.log
 fi
 if ! socket_is_live "$snapshotter_socket"; then
-	"$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket" >/var/log/sysbox-snapshotter.log 2>&1 &
+	# K3s creates its containerd socket only after this launcher returns. Start
+	# the snapshotter in the background in that first-boot path; on subsequent
+	# invocations (for example the standalone nested Chart agent) it starts
+	# immediately and is checked before returning.
+	if [ ! -S "$containerd_socket" ]; then
+		(
+			i=0
+			while [ "$i" -lt 120 ] && [ ! -S "$containerd_socket" ]; do
+				i=$((i + 1))
+				sleep 1
+			done
+			[ -S "$containerd_socket" ] || exit 1
+			exec "$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket"
+		) >/var/log/sysbox-snapshotter.log 2>&1 &
+	else
+		"$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket" >/var/log/sysbox-snapshotter.log 2>&1 &
+	fi
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets $snapshotter_socket"
-	wait_for_socket "$pid" "$snapshotter_socket" /var/log/sysbox-snapshotter.log
+	if [ -S "$containerd_socket" ]; then
+		wait_for_socket "$pid" "$snapshotter_socket" /var/log/sysbox-snapshotter.log
+	fi
 fi
 
 if [ "${SYSBOX_INNER_KEEPALIVE:-false}" = "true" ]; then
