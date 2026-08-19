@@ -96,6 +96,12 @@ fi
 mkdir -p "$host_root/usr/local/bin"
 ln -sf "$bin_dir/mount.fuse3" "$host_root/usr/local/bin/mount.fuse3"
 ln -sf "$bin_dir/rsync" "$host_root/usr/local/bin/rsync"
+# Persistent rootfs layers may carry an opaque /usr/local directory from an
+# earlier container incarnation. Keep the host dependency visible through the
+# stable /usr/bin path used by sysbox-mgr's preflight check as well.
+mkdir -p "$host_root/usr/bin"
+ln -sf "$bin_dir/rsync" "$host_root/usr/bin/rsync"
+ln -sf "$bin_dir/mount.fuse3" "$host_root/usr/bin/mount.fuse3"
 
 mkdir -p /run/sysbox "$data_root" "$fs_mountpoint" "$snapshotter_root" "$(dirname "$config_template")"
 # The outer PoC node can reserve a large fraction of its disk. Keep the inner
@@ -123,7 +129,11 @@ fi
 # the wrapper distinct from the unmodified image binary and expose it through
 # the standard sysbox-runc handler (never a second RuntimeClass name).
 if [ ! -x "$bin_dir/sysbox-runc.real" ]; then
-	mv "$bin_dir/sysbox-runc" "$bin_dir/sysbox-runc.real"
+	# Keep the canonical binary path intact. The CKM server command and
+	# readiness checks use /opt/sysbox/bin/generic/sysbox-runc on every
+	# restart; moving it away made a previously initialized L1 fail after
+	# the first Pod restart. The nested wrapper calls this private copy.
+	cp -a "$bin_dir/sysbox-runc" "$bin_dir/sysbox-runc.real"
 fi
 cat >"$bin_dir/sysbox-runc-nested" <<EOF
 #!/bin/sh
