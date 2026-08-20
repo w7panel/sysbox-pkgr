@@ -5,6 +5,7 @@ set -eu
 
 bin_dir="${SYSBOX_INNER_BIN_DIR:-/opt/sysbox/bin/generic}"
 host_root="${SYSBOX_INNER_HOST_ROOT:-/}"
+mount_ns_pid="${SYSBOX_INNER_MOUNT_NS_PID:-}"
 config_template="${K3S_CONTAINERD_CONFIG_TEMPLATE:-/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl}"
 data_root="${SYSBOX_INNER_DATA_ROOT:-/var/lib/rancher/k3s/sysbox-inner}"
 fs_mountpoint="${SYSBOX_INNER_FS_MOUNTPOINT:-/var/lib/sysboxfs-inner}"
@@ -12,7 +13,33 @@ snapshotter_socket="${SYSBOX_INNER_SNAPSHOTTER_SOCKET:-/run/sysbox/sysbox-snapsh
 snapshotter_root="${SYSBOX_INNER_SNAPSHOTTER_ROOT:-/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.sysbox}"
 containerd_socket="${K3S_CONTAINERD_SOCKET:-/run/k3s/containerd/containerd.sock}"
 pause_image="${K3S_PAUSE_IMAGE:-rancher/mirrored-pause:3.6}"
+log_dir="${SYSBOX_INNER_LOG_DIR:-/var/log}"
 PATH="$bin_dir:$PATH"
+
+# A nested-agent Pod has its own mount namespace, while the L2 K3s/containerd
+# process keeps the real /run/k3s and /run/sysbox mounts in PID 1's namespace.
+# Running the daemons in that namespace makes their Unix sockets visible to
+# the containerd that consumes them. The default remains the historical local
+# namespace for standalone launcher use.
+run_in_runtime_ns() {
+	if [ -n "$mount_ns_pid" ]; then
+		nsenter -m -t "$mount_ns_pid" -- "$@"
+	else
+		"$@"
+	fi
+}
+
+runtime_shell() {
+	if [ -n "$mount_ns_pid" ]; then
+		program=$1
+		shift
+		nsenter -m -t "$mount_ns_pid" -- sh -ec "$program" sh "$@"
+	else
+		program=$1
+		shift
+		sh -ec "$program" sh "$@"
+	fi
+}
 
 die() {
 	echo "ERROR: $*" >&2
@@ -21,16 +48,46 @@ die() {
 
 socket_is_live() {
 	socket=$1
-	[ -S "$socket" ] && grep -Fq " $socket" /proc/net/unix
+	if [ -n "$mount_ns_pid" ]; then
+		runtime_shell '[ -S "$1" ]' "$socket"
+	else
+		[ -S "$socket" ] && grep -Fq " $socket" /proc/net/unix
+	fi
 }
 
 remove_stale_socket() {
 	socket=$1
+	if [ -n "$mount_ns_pid" ]; then
+		runtime_shell 'if [ -e "$1" ] && [ ! -S "$1" ]; then exit 42; fi; case "$1" in */sysmgr.sock) pidfile=/run/sysbox/sysmgr.pid ;; */sysfs.sock) pidfile=/run/sysbox/sysfs.pid ;; *) pidfile= ;; esac; if [ -n "$pidfile" ]; then pid=$(cat "$pidfile" 2>/dev/null || true); case "$pid" in ""|*[!0-9]*) ;; *) kill "$pid" 2>/dev/null || true ;; esac; rm -f "$1" "$pidfile"; fi' "$socket" || {
+			[ "$?" -eq 42 ] || die "refusing to replace non-socket path: $socket"
+		}
+		return 0
+	fi
 	if [ -e "$socket" ] && [ ! -S "$socket" ]; then
 		die "refusing to replace non-socket path: $socket"
 	fi
 	if [ -S "$socket" ] && ! socket_is_live "$socket"; then
 		rm -f "$socket"
+	fi
+}
+
+remove_stale_pidfile() {
+	pidfile=$1
+	if [ -n "$mount_ns_pid" ]; then
+		runtime_shell 'if [ -f "$1" ]; then pid=$(cat "$1" 2>/dev/null || true); case "$pid" in ""|*[!0-9]*) ;; *) kill "$pid" 2>/dev/null || true ;; esac; rm -f "$1"; fi' "$pidfile"
+		return 0
+	fi
+	if [ -f "$pidfile" ]; then
+		pid=$(cat "$pidfile" 2>/dev/null || true)
+		case "$pid" in
+			''|*[!0-9]*) ;;
+			*)
+				# A daemon from a previous workload restart can survive in the
+				# pod sandbox PID namespace while its socket is already gone.
+				kill "$pid" 2>/dev/null || true
+				;;
+		esac
+		rm -f "$pidfile"
 	fi
 }
 
@@ -41,7 +98,7 @@ wait_for_socket() {
 	i=0
 	while [ "$i" -lt 30 ]; do
 		socket_is_live "$socket" && return 0
-		kill -0 "$pid" 2>/dev/null || die "Sysbox daemon exited; see $log"
+		run_in_runtime_ns kill -0 "$pid" 2>/dev/null || die "Sysbox daemon exited; see $log"
 		i=$((i + 1))
 		sleep 1
 	done
@@ -96,6 +153,24 @@ fi
 mkdir -p "$host_root/usr/local/bin"
 ln -sf "$bin_dir/mount.fuse3" "$host_root/usr/local/bin/mount.fuse3"
 ln -sf "$bin_dir/rsync" "$host_root/usr/local/bin/rsync"
+# The minimal K3s rootfs does not carry kmod, but sysbox-mgr's preflight
+# requires modprobe to be discoverable in the runtime mount namespace. Keep a
+# copy in the shared inner bin directory and expose it through both standard
+# lookup locations in the L2 root.
+if command -v modprobe >/dev/null 2>&1; then
+	install -m 0755 "$(readlink -f "$(command -v modprobe)")" "$bin_dir/kmod"
+	mkdir -p "$host_root/usr/sbin" "$host_root/usr/bin"
+	ln -sf "$bin_dir/kmod" "$host_root/usr/sbin/modprobe"
+	ln -sf "$bin_dir/kmod" "$host_root/usr/bin/modprobe"
+fi
+if command -v iptables >/dev/null 2>&1; then
+	iptables_multi=$(readlink -f "$(command -v iptables)")
+	install -m 0755 "$iptables_multi" "$bin_dir/xtables-multi"
+	mkdir -p "$host_root/usr/sbin" "$host_root/usr/bin"
+	for utility in iptables ip6tables iptables-restore iptables-save ip6tables-restore ip6tables-save; do
+		ln -sf "$bin_dir/xtables-multi" "$host_root/usr/sbin/$utility"
+	done
+fi
 # Persistent rootfs layers may carry an opaque /usr/local directory from an
 # earlier container incarnation. Keep the host dependency visible through the
 # stable /usr/bin path used by sysbox-mgr's preflight check as well.
@@ -103,7 +178,7 @@ mkdir -p "$host_root/usr/bin"
 ln -sf "$bin_dir/rsync" "$host_root/usr/bin/rsync"
 ln -sf "$bin_dir/mount.fuse3" "$host_root/usr/bin/mount.fuse3"
 
-mkdir -p /run/sysbox "$data_root" "$fs_mountpoint" "$snapshotter_root" "$(dirname "$config_template")"
+run_in_runtime_ns mkdir -p /run/sysbox "$data_root" "$fs_mountpoint" "$snapshotter_root" "$(dirname "$config_template")" "$log_dir"
 # The outer PoC node can reserve a large fraction of its disk. Keep the inner
 # kubelet's eviction threshold below the usable space so the nested runtime
 # test is not evicted before runc is exercised.
@@ -213,42 +288,48 @@ for socket in $required_sockets; do
 	remove_stale_socket "$socket"
 done
 if ! socket_is_live /run/sysbox/sysmgr.sock; then
-	"$bin_dir/sysbox-mgr" --mapping-mode nested-identity --disable-inner-image-preload --disable-idmapped-mount --disable-ovfs-on-idmapped-mount --data-root "$data_root" >/var/log/sysbox-mgr.log 2>&1 &
+	remove_stale_pidfile /run/sysbox/sysmgr.pid
+fi
+if ! socket_is_live /run/sysbox/sysfs.sock; then
+	remove_stale_pidfile /run/sysbox/sysfs.pid
+fi
+if ! socket_is_live /run/sysbox/sysmgr.sock; then
+	run_in_runtime_ns "$bin_dir/sysbox-mgr" --mapping-mode nested-identity --disable-inner-image-preload --disable-idmapped-mount --disable-ovfs-on-idmapped-mount --data-root "$data_root" >"$log_dir/sysbox-mgr.log" 2>&1 &
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets /run/sysbox/sysmgr.sock"
-	wait_for_socket "$pid" /run/sysbox/sysmgr.sock /var/log/sysbox-mgr.log
+	wait_for_socket "$pid" /run/sysbox/sysmgr.sock "$log_dir/sysbox-mgr.log"
 fi
 if ! socket_is_live /run/sysbox/sysfs.sock; then
-	"$bin_dir/sysbox-fs" --mountpoint "$fs_mountpoint" >/var/log/sysbox-fs.log 2>&1 &
+	run_in_runtime_ns "$bin_dir/sysbox-fs" --mountpoint "$fs_mountpoint" >"$log_dir/sysbox-fs.log" 2>&1 &
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets /run/sysbox/sysfs.sock"
-	wait_for_socket "$pid" /run/sysbox/sysfs.sock /var/log/sysbox-fs.log
+	wait_for_socket "$pid" /run/sysbox/sysfs.sock "$log_dir/sysbox-fs.log"
 fi
 if ! socket_is_live "$snapshotter_socket"; then
 	# K3s creates its containerd socket only after this launcher returns. Start
 	# the snapshotter in the background in that first-boot path; on subsequent
 	# invocations (for example the standalone nested Chart agent) it starts
 	# immediately and is checked before returning.
-	if [ ! -S "$containerd_socket" ]; then
+	if ! socket_is_live "$containerd_socket"; then
 		(
 			i=0
-			while [ "$i" -lt 120 ] && [ ! -S "$containerd_socket" ]; do
+			while [ "$i" -lt 120 ] && ! socket_is_live "$containerd_socket"; do
 				i=$((i + 1))
 				sleep 1
 			done
-			[ -S "$containerd_socket" ] || exit 1
-			exec "$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket"
-		) >/var/log/sysbox-snapshotter.log 2>&1 &
+			socket_is_live "$containerd_socket" || exit 1
+			run_in_runtime_ns "$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket"
+		) >"$log_dir/sysbox-snapshotter.log" 2>&1 &
 	else
-		"$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket" >/var/log/sysbox-snapshotter.log 2>&1 &
+		run_in_runtime_ns "$bin_dir/sysbox-snapshotter" --socket "$snapshotter_socket" --root "$snapshotter_root" --containerd-socket "$containerd_socket" >"$log_dir/sysbox-snapshotter.log" 2>&1 &
 	fi
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets $snapshotter_socket"
-	if [ -S "$containerd_socket" ]; then
-		wait_for_socket "$pid" "$snapshotter_socket" /var/log/sysbox-snapshotter.log
+	if socket_is_live "$containerd_socket"; then
+		wait_for_socket "$pid" "$snapshotter_socket" "$log_dir/sysbox-snapshotter.log"
 	fi
 fi
 
