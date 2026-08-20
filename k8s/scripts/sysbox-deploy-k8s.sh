@@ -1598,13 +1598,12 @@ function main() {
 	fi
 
 	os_distro_release=$(get_host_distro)
-	if [[ "$os_distro_release" == "centos-9" ]]; then
-		# CentOS Stream 9's systemctl cannot address the host bus from the
-		# installer container; execute service operations in the host namespace.
-		systemctl() {
-			nsenter -t 1 -m -u -i -n -p -- /proc/1/root/usr/bin/systemctl "$@"
-		}
-	fi
+	# The installer runs in its own mount namespace, so container-local
+	# systemctl may only report that it is running in a chroot. Always target
+	# the host's PID 1 when managing host services.
+	systemctl() {
+		nsenter -t 1 -m -u -i -n -p -- /proc/1/root/usr/bin/systemctl "$@"
+	}
 	if ! is_supported_distro; then
 		echo "Warning: Sysbox is not officially supported on this host's distro ($os_distro_release)".
 	fi
