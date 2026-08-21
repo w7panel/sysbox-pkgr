@@ -459,13 +459,22 @@ if [ "${SYSBOX_INNER_KEEPALIVE:-false}" = "true" ]; then
 	}
 	trap cleanup EXIT
 	trap 'exit 0' TERM INT
+	health_failures=0
 	while :; do
+		health_ok=true
 		for pid in $managed_pids; do
-			kill -0 "$pid" 2>/dev/null || die "managed Sysbox daemon exited"
+			kill -0 "$pid" 2>/dev/null || health_ok=false
 		done
-		daemon_is_live /run/sysbox/sysmgr.sock /run/sysbox/sysmgr.pid sysbox-mgr || die "sysbox-mgr is not live"
-		daemon_is_live /run/sysbox/sysfs.sock /run/sysbox/sysfs.pid sysbox-fs || die "sysbox-fs is not live"
-		snapshotter_is_live || die "sysbox-snapshotter is not live"
+		daemon_is_live /run/sysbox/sysmgr.sock /run/sysbox/sysmgr.pid sysbox-mgr || health_ok=false
+		daemon_is_live /run/sysbox/sysfs.sock /run/sysbox/sysfs.pid sysbox-fs || health_ok=false
+		snapshotter_is_live || health_ok=false
+		if [ "$health_ok" = true ]; then
+			health_failures=0
+		else
+			health_failures=$((health_failures + 1))
+			echo "WARN: nested Sysbox daemon health check failed ($health_failures/6)" >&2
+			[ "$health_failures" -lt 6 ] || die "nested Sysbox daemon health check failed repeatedly"
+		fi
 		sleep 5 &
 		wait $!
 	done

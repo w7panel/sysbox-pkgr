@@ -20,6 +20,30 @@ ready_label="sysbox.w7panel.io/nested-runtime"
 
 [ -n "${NODE_NAME:-}" ] || { echo "ERROR: NODE_NAME is required" >&2; exit 1; }
 
+cleanup_stale_launchers() {
+	for proc_dir in /proc/[0-9]*; do
+		pid=${proc_dir##*/}
+		[ "$pid" != "$$" ] || continue
+		if [ ! -r "$proc_dir/cmdline" ] || [ ! -r "$proc_dir/environ" ]; then
+			continue
+		fi
+		cmdline=$(tr '\000' ' ' <"$proc_dir/cmdline" 2>/dev/null || true)
+		case "$cmdline" in
+			*"/opt/sysbox/scripts/sysbox-inner-k3s.sh"*)
+				tr '\000' '\n' <"$proc_dir/environ" 2>/dev/null |
+					grep -qx 'SYSBOX_INNER_KEEPALIVE=true' || continue
+				echo "Stopping stale nested Sysbox launcher PID $pid" >&2
+				kill -TERM "$pid" 2>/dev/null || true
+				;;
+		esac
+	done
+	# Let the launcher trap stop its managed daemons before the new launcher
+	# claims the shared Sysbox sockets.
+	sleep 3
+}
+
+cleanup_stale_launchers
+
 # With hostPID=true, a nested L2 agent sees the L1 PID namespace. PID 1 is
 # therefore the L1 server, while the L2 K3s container init is a child process
 # (usually `/bin/k3s init`). Entering PID 1 after an L2 restart publishes the
@@ -30,10 +54,13 @@ if [ "$mount_ns_pid" = "1" ]; then
 	resolved_mount_ns_pid=
 	for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
 		for proc in /proc/[0-9]*; do
-			[ -r "$proc/cmdline" ] || continue
+			if [ ! -r "$proc/cmdline" ] || [ ! -e "$proc/exe" ]; then
+				continue
+			fi
+			[ "$(basename "$(readlink "$proc/exe" 2>/dev/null || true)")" = k3s ] || continue
 			cmdline=$(tr '\000' ' ' <"$proc/cmdline" 2>/dev/null || true)
 			case "$cmdline" in
-				*"/bin/k3s init"*|*" k3s init"*)
+				*"/bin/k3s init"*|*" k3s init"*|*"/bin/k3s server"*|*" k3s server"*)
 					resolved_mount_ns_pid=${proc##*/}
 					break 2
 					;;
@@ -133,15 +160,21 @@ if runtime_loaded "$bootstrap_runtime_binary"; then
 	handler_binary="$bootstrap_runtime_binary"
 	if daemons_live; then
 	echo "Using CKM-prepared nested sysbox-runc handler: $bootstrap_runtime_binary"
+	health_failures=0
 	while :; do
 		if runtime_loaded "$bootstrap_runtime_binary" && daemons_live; then
+			health_failures=0
 			kubectl label node "$NODE_NAME" "$ready_label=ready" --overwrite >/dev/null || true
 			touch /run/sysbox/nested-runtime-ready
 		else
 			rm -f /run/sysbox/nested-runtime-ready
 			kubectl label node "$NODE_NAME" "$ready_label-" >/dev/null 2>&1 || true
-			echo "ERROR: CKM-prepared Sysbox daemon health check failed; restarting agent" >&2
-			exit 1
+			health_failures=$((health_failures + 1))
+			echo "WARN: CKM-prepared Sysbox daemon health check failed ($health_failures/6)" >&2
+			if [ "$health_failures" -ge 6 ]; then
+				echo "ERROR: CKM-prepared Sysbox daemon health check failed repeatedly; restarting agent" >&2
+				exit 1
+			fi
 		fi
 		sleep 5
 	done
@@ -152,23 +185,37 @@ rm -f /run/sysbox/nested-runtime-ready
 kubectl label node "$NODE_NAME" "$ready_label-" >/dev/null 2>&1 || true
 
 launcher_pid=
+launcher_pgid=
 cleanup() {
 	status=$?
 	trap - EXIT TERM INT
 	rm -f /run/sysbox/nested-runtime-ready
 	kubectl label node "$NODE_NAME" "$ready_label-" >/dev/null 2>&1 || true
-	[ -z "$launcher_pid" ] || kill "$launcher_pid" 2>/dev/null || true
+	if [ -n "$launcher_pgid" ]; then
+		kill -TERM "-$launcher_pgid" 2>/dev/null || true
+	else
+		[ -z "$launcher_pid" ] || kill -TERM "$launcher_pid" 2>/dev/null || true
+	fi
 	[ -z "$launcher_pid" ] || wait "$launcher_pid" 2>/dev/null || true
 	exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 0' TERM INT
 
-SYSBOX_INNER_BIN_DIR="$bin_dir" \
-	SYSBOX_INNER_ENTER_PID_NS="$enter_pid_ns" \
-	SYSBOX_INNER_KEEPALIVE=true \
-	"$launcher" &
-launcher_pid=$!
+if command -v setsid >/dev/null 2>&1; then
+	SYSBOX_INNER_BIN_DIR="$bin_dir" \
+		SYSBOX_INNER_ENTER_PID_NS="$enter_pid_ns" \
+		SYSBOX_INNER_KEEPALIVE=true \
+		setsid "$launcher" &
+	launcher_pid=$!
+	launcher_pgid=$launcher_pid
+else
+	SYSBOX_INNER_BIN_DIR="$bin_dir" \
+		SYSBOX_INNER_ENTER_PID_NS="$enter_pid_ns" \
+		SYSBOX_INNER_KEEPALIVE=true \
+		"$launcher" &
+	launcher_pid=$!
+fi
 
 echo "Waiting for K3s containerd to load $runtime_name with BinaryName=$runtime_binary and snapshotter=sysbox; for first-time migration, roll-recreate the L1 K3s Pod from L0 (no physical-host reboot)."
 while kill -0 "$launcher_pid" 2>/dev/null; do
