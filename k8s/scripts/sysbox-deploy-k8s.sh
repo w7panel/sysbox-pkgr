@@ -1297,18 +1297,6 @@ function rm_label_from_node() {
 	kubectl label node "$NODE_NAME" "${label}-"
 }
 
-function add_taint_to_node() {
-	local taint=$1
-	echo "Adding K8s taint \"$taint\" to node ..."
-	kubectl taint nodes "$NODE_NAME" "$taint" --overwrite=true
-}
-
-function rm_taint_from_node() {
-	taint=$1
-	echo "Removing K8s taint \"$taint\" from node ..."
-	kubectl taint nodes "$NODE_NAME" "$taint"-
-}
-
 function is_containerd_with_userns() {
 
 	# containerd 2.0 introduces support for user-namespaces, but versions 2.0.1
@@ -1630,8 +1618,6 @@ function main() {
 		k8s_runtime="crio"
 	fi
 
-	k8s_taints=${SYSBOX_TAINT:-"sysbox-runtime=not-running:NoSchedule"}
-
 	echo "Detected Kubernetes version $k8s_version"
 
 	local edition_tag=${1:-}
@@ -1671,9 +1657,6 @@ function main() {
 	install)
 		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
 		install_precheck
-
-		# Prevent new pods being scheduled till sysbox installation/update is completed.
-		add_taint_to_node "${k8s_taints}"
 
 		# Install CRI-O (if necessary)
 		if [[ "$do_crio_install" == "true" ]]; then
@@ -1745,7 +1728,6 @@ function main() {
 		fi
 
 		add_label_to_node "sysbox-runtime=running"
-		rm_taint_from_node "${k8s_taints}"
 
 		if [[ "$do_sysbox_install" == "true" ]] || [[ "$sysbox_install_in_progress" == "true" ]]; then
 			if [[ "$do_kubelet_use_crio" == "true" ]]; then
@@ -1763,9 +1745,6 @@ function main() {
 	cleanup)
 		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
 		cleanup_sysbox_admission_resources
-
-		# Prevent new pods being scheduled during sysbox cleanup phase.
-		add_taint_to_node "${k8s_taints}"
 
 		# Switch the K8s runtime away from CRI-O (but only if this daemonset installed CRI-O previously)
 		if [ -f ${host_var_lib_sysbox_deploy_k8s}/crio_installed ] && [[ "$k8s_runtime" == "crio" ]]; then
@@ -1821,8 +1800,6 @@ function main() {
 		# Remove all the sysbox pods in the node to ensure that no sysbox pods are
 		# left behind in an inconsistent state.
 		delete_sysbox_pods
-
-		rm_taint_from_node "${k8s_taints}"
 		;;
 
 	*)
