@@ -459,8 +459,8 @@ function deploy_sysbox_installer_helper() {
 
 function remove_sysbox_installer_helper() {
 	echo "Stopping the $sysbox_edition installer helper on the host ..."
-	systemctl stop sysbox-installer-helper.service
-	systemctl disable sysbox-installer-helper.service
+	systemctl stop sysbox-installer-helper.service || true
+	systemctl disable sysbox-installer-helper.service || true
 	echo "Removing $sysbox_edition installer helper from the host ..."
 	rm -f ${host_local_bin}/sysbox-installer-helper.sh
 	rm -f ${host_systemd}/sysbox-installer-helper.service
