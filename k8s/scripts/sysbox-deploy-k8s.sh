@@ -293,6 +293,7 @@ function get_artifacts_dir() {
 		[[ "$distro" == "ubuntu-21.10" ]] ||
 		[[ "$distro" == "ubuntu-20.04" ]] ||
 		[[ "$distro" == "ubuntu-18.04" ]] ||
+		[[ "$distro" == "centos-9" ]] ||
 		[[ "$distro" =~ "debian" ]]; then
 		artifacts_dir="${sysbox_artifacts}/bin/generic"
 	elif [[ "$distro" =~ "flatcar" ]]; then
@@ -409,7 +410,7 @@ function apply_sysbox_env_config() {
 	# Note: this requires CAP_SYS_ADMIN on the host
 	echo "Configuring host sysctls ..."
 	if command -v sysctl >/dev/null 2>&1; then
-		sysctl -p "${host_sysctl}/99-sysbox-sysctl.conf"
+		sysctl -p "${host_sysctl}/99-sysbox-sysctl.conf" || true
 	else
 		echo "Warning: sysctl is unavailable in this installer environment; skipping host sysctl configuration"
 	fi
@@ -1089,7 +1090,7 @@ function get_container_runtime() {
 }
 
 function get_host_distro() {
-	local distro_name=$(grep -w "^ID" "$host_os_release" | cut -d "=" -f2)
+	local distro_name=$(grep -w "^ID" "$host_os_release" | cut -d "=" -f2 | tr -d '"')
 	local version_id=$(grep -w "^VERSION_ID" "$host_os_release" | cut -d "=" -f2 | tr -d '"')
 	echo "${distro_name}-${version_id}"
 }
@@ -1128,6 +1129,7 @@ function is_supported_distro() {
 		[[ "$distro" == "ubuntu-21.10" ]] ||
 		[[ "$distro" == "ubuntu-20.04" ]] ||
 		[[ "$distro" == "ubuntu-18.04" ]] ||
+		[[ "$distro" == "centos-9" ]] ||
 		[[ "$distro" =~ "debian" ]] ||
 		[[ "$distro" =~ "flatcar" ]]; then
 		return
@@ -1297,18 +1299,6 @@ function rm_label_from_node() {
 	local label=$1
 	echo "Removing K8s label \"$label\" from node ..."
 	kubectl label node "$NODE_NAME" "${label}-"
-}
-
-function add_taint_to_node() {
-	local taint=$1
-	echo "Adding K8s taint \"$taint\" to node ..."
-	kubectl taint nodes "$NODE_NAME" "$taint" --overwrite=true
-}
-
-function rm_taint_from_node() {
-	taint=$1
-	echo "Removing K8s taint \"$taint\" from node ..."
-	kubectl taint nodes "$NODE_NAME" "$taint"-
 }
 
 function is_containerd_with_userns() {
@@ -1600,6 +1590,12 @@ function main() {
 	fi
 
 	os_distro_release=$(get_host_distro)
+	# The installer runs in its own mount namespace, so container-local
+	# systemctl may only report that it is running in a chroot. Always target
+	# the host's PID 1 when managing host services.
+	systemctl() {
+		nsenter -t 1 -m -u -i -n -p -- /proc/1/root/usr/bin/systemctl "$@"
+	}
 	if ! is_supported_distro; then
 		echo "Warning: Sysbox is not officially supported on this host's distro ($os_distro_release)".
 	fi
@@ -1625,8 +1621,6 @@ function main() {
 	elif [ "$k8s_runtime" == "cri-o" ]; then
 		k8s_runtime="crio"
 	fi
-
-	k8s_taints=${SYSBOX_TAINT:-"sysbox-runtime=not-running:NoSchedule"}
 
 	echo "Detected Kubernetes version $k8s_version"
 
@@ -1667,9 +1661,6 @@ function main() {
 	install)
 		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
 		install_precheck
-
-		# Prevent new pods being scheduled till sysbox installation/update is completed.
-		add_taint_to_node "${k8s_taints}"
 
 		# Install CRI-O (if necessary)
 		if [[ "$do_crio_install" == "true" ]]; then
@@ -1741,7 +1732,6 @@ function main() {
 		fi
 
 		add_label_to_node "sysbox-runtime=running"
-		rm_taint_from_node "${k8s_taints}"
 
 		if [[ "$do_sysbox_install" == "true" ]] || [[ "$sysbox_install_in_progress" == "true" ]]; then
 			if [[ "$do_kubelet_use_crio" == "true" ]]; then
@@ -1759,9 +1749,6 @@ function main() {
 	cleanup)
 		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
 		cleanup_sysbox_admission_resources
-
-		# Prevent new pods being scheduled during sysbox cleanup phase.
-		add_taint_to_node "${k8s_taints}"
 
 		# Switch the K8s runtime away from CRI-O (but only if this daemonset installed CRI-O previously)
 		if [ -f ${host_var_lib_sysbox_deploy_k8s}/crio_installed ] && [[ "$k8s_runtime" == "crio" ]]; then
@@ -1817,8 +1804,6 @@ function main() {
 		# Remove all the sysbox pods in the node to ensure that no sysbox pods are
 		# left behind in an inconsistent state.
 		delete_sysbox_pods
-
-		rm_taint_from_node "${k8s_taints}"
 		;;
 
 	*)
