@@ -389,11 +389,11 @@ function copy_sysbox_config_to_host() {
 		rm -f "${host_systemd}/sysbox-snapshotter.service"
 	fi
 	systemctl daemon-reload
-	systemctl enable sysbox.service
-	systemctl enable sysbox-mgr.service
-	systemctl enable sysbox-fs.service
+	systemctl enable sysbox.service || true
+	systemctl enable sysbox-mgr.service || true
+	systemctl enable sysbox-fs.service || true
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
-		systemctl enable sysbox-snapshotter.service
+		systemctl enable sysbox-snapshotter.service || true
 	fi
 }
 
