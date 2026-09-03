@@ -408,7 +408,11 @@ function rm_systemd_units_from_host() {
 function apply_sysbox_env_config() {
 	# Note: this requires CAP_SYS_ADMIN on the host
 	echo "Configuring host sysctls ..."
-	sysctl -p "${host_sysctl}/99-sysbox-sysctl.conf"
+	if command -v sysctl >/dev/null 2>&1; then
+		sysctl -p "${host_sysctl}/99-sysbox-sysctl.conf"
+	else
+		echo "Warning: sysctl is unavailable in this installer environment; skipping host sysctl configuration"
+	fi
 }
 
 function start_sysbox() {
