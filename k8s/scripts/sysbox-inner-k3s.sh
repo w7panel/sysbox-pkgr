@@ -178,7 +178,7 @@ wait_for_snapshotter() {
 	die "timed out waiting for $snapshotter_socket"
 }
 
-for binary in sysbox-runc sysbox-mgr sysbox-fs sysbox-snapshotter rsync; do
+for binary in sysbox-runc sysbox-snapshotter rsync; do
 	[ -x "$bin_dir/$binary" ] || die "inner K3s Sysbox binary is missing: $bin_dir/$binary"
 done
 [ -c /dev/fuse ] || die "inner K3s Sysbox requires a /dev/fuse device"
@@ -365,34 +365,41 @@ state = "/run/k3s/containerd"
   config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
 EOF
 
-if [ "${SYSBOX_INNER_START_DAEMONS:-true}" != "true" ]; then
-	exit 0
-fi
-
 managed_pids=
 managed_sockets=
-if ! daemon_is_live /run/sysbox/sysmgr.sock /run/sysbox/sysmgr.pid sysbox-mgr; then
-	stop_daemon /run/sysbox/sysmgr.sock /run/sysbox/sysmgr.pid sysbox-mgr
-fi
-if ! daemon_is_live /run/sysbox/sysfs.sock /run/sysbox/sysfs.pid sysbox-fs; then
-	stop_daemon /run/sysbox/sysfs.sock /run/sysbox/sysfs.pid sysbox-fs
+start_full_daemons="${SYSBOX_INNER_START_DAEMONS:-true}"
+if [ "$start_full_daemons" = "true" ]; then
+	if ! daemon_is_live /run/sysbox/sysmgr.sock /run/sysbox/sysmgr.pid sysbox-mgr; then
+		stop_daemon /run/sysbox/sysmgr.sock /run/sysbox/sysmgr.pid sysbox-mgr
+	fi
+	if ! daemon_is_live /run/sysbox/sysfs.sock /run/sysbox/sysfs.pid sysbox-fs; then
+		stop_daemon /run/sysbox/sysfs.sock /run/sysbox/sysfs.pid sysbox-fs
+	fi
 fi
 if ! snapshotter_is_live; then
 	stop_daemon "$snapshotter_socket" /run/sysbox/sysbox-snapshotter.pid sysbox-snapshotter
 fi
 if ! daemon_is_live /run/sysbox/sysmgr.sock /run/sysbox/sysmgr.pid sysbox-mgr; then
+	if [ "$start_full_daemons" != "true" ]; then
+		:
+	else
 	run_in_runtime_ns "$bin_dir/sysbox-mgr" --mapping-mode nested-identity --disable-inner-image-preload --disable-idmapped-mount --disable-ovfs-on-idmapped-mount --data-root "$data_root" >"$log_dir/sysbox-mgr.log" 2>&1 &
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets /run/sysbox/sysmgr.sock"
 	wait_for_socket "$pid" /run/sysbox/sysmgr.sock "$log_dir/sysbox-mgr.log"
+	fi
 fi
 if ! daemon_is_live /run/sysbox/sysfs.sock /run/sysbox/sysfs.pid sysbox-fs; then
+	if [ "$start_full_daemons" != "true" ]; then
+		:
+	else
 	run_in_runtime_ns "$bin_dir/sysbox-fs" --mountpoint "$fs_mountpoint" >"$log_dir/sysbox-fs.log" 2>&1 &
 	pid=$!
 	managed_pids="$managed_pids $pid"
 	managed_sockets="$managed_sockets /run/sysbox/sysfs.sock"
 	wait_for_socket "$pid" /run/sysbox/sysfs.sock "$log_dir/sysbox-fs.log"
+	fi
 fi
 if ! snapshotter_is_live; then
 	start_snapshotter() {
