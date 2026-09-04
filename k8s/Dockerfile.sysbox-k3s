@@ -30,7 +30,7 @@ ARG KUBECTL_VERSION="1.32.13"
 ARG CRICTL_VERSION="v1.35.0"
 ARG GITHUB_PROXY="https://gh-proxy.org/"
 
-RUN dnf install -y --allowerasing systemd curl wget git bc which jq procps-ng rsync \
+RUN dnf install -y --allowerasing systemd curl wget git bc which jq procps-ng rsync fuse3 \
     && dnf clean all
 
 RUN case "${SYS_ARCH}" in \
@@ -70,6 +70,7 @@ COPY bin/sysbox-ce /opt/sysbox/bin
 
 # The inner K3s launcher invokes rsync through the bundled Sysbox tool path.
 RUN cp -a /usr/bin/rsync /opt/sysbox/bin/generic/rsync
+RUN cp -a /usr/bin/fusermount3 /opt/sysbox/bin/generic/fusermount3
 
 RUN ln -s /opt/sysbox/bin/generic/sysbox-admission /usr/local/bin/sysbox-admission
 
