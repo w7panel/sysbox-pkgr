@@ -69,7 +69,7 @@ RUN git clone --branch k5.4 "${GITHUB_PROXY}https://github.com/nestybox/shiftfs-
 COPY bin/sysbox-ce /opt/sysbox/bin
 
 # The inner K3s launcher invokes rsync through the bundled Sysbox tool path.
-RUN ln -sf /usr/bin/rsync /opt/sysbox/bin/generic/rsync
+RUN cp -a /usr/bin/rsync /opt/sysbox/bin/generic/rsync
 
 RUN ln -s /opt/sysbox/bin/generic/sysbox-admission /usr/local/bin/sysbox-admission
 
