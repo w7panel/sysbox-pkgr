@@ -352,6 +352,7 @@ state = "/run/k3s/containerd"
   # mounts, which makes interactive `kubectl exec -it` fail for Pods that do
   # not set runtimeClassName.  runc-lite keeps the normal runc handler name
   # while providing the required tty setup.
+  snapshotter = "sysbox"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
   SystemdCgroup = false
