@@ -350,18 +350,18 @@ state = "/run/k3s/containerd"
   # Use the lightweight runtime for the default handler as well.  The
   # standard runc binary does not create /dev/ptmx in these nested rootfs
   # mounts, which makes interactive `kubectl exec -it` fail for Pods that do
-  # not set runtimeClassName.  runc-lite keeps the normal runc handler name
+  # not set runtimeClassName. sysbox-runc-lite keeps the normal runc handler name
   # while providing the required tty setup.
   snapshotter = "sysbox"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
   SystemdCgroup = false
-  BinaryName = "$bin_dir/runc-lite"
+  BinaryName = "$bin_dir/sysbox-runc-lite"
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
   snapshotter = "sysbox"
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/volume-init", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
+  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
   container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]

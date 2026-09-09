@@ -195,7 +195,7 @@ sources/sysbox.tgz:
 		-v $(SYSBOX_DIR):/sysbox                                 \
 		-v $(CURDIR)/$(@D):/v                                    \
 		alpine                                                   \
-		tar -C / -czf /v/sysbox.tgz --exclude='sysbox-pkgr' sysbox
+		tar -C / -czf /v/sysbox.tgz --exclude='sysbox-pkgr' --exclude='sysbox/.git' --exclude='sysbox/dist' sysbox
 
 sources/sysbox.service: ../systemd/sysbox.service
 	mkdir -p $(@D)
