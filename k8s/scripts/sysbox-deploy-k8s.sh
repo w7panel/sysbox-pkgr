@@ -313,6 +313,7 @@ function copy_sysbox_to_host() {
 	install_host_binary "${artifacts_dir}/sysbox-mgr" "${host_bin}/sysbox-mgr"
 	install_host_binary "${artifacts_dir}/sysbox-fs" "${host_bin}/sysbox-fs"
 	install_host_binary "${artifacts_dir}/sysbox-runc" "${host_bin}/sysbox-runc"
+	install_host_binary "${artifacts_dir}/sysbox-runc-lite" "${host_bin}/sysbox-runc-lite"
 	install_host_binary "${artifacts_dir}/sysbox-admission" "${host_bin}/sysbox-admission"
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
 		install_host_binary "${artifacts_dir}/sysbox-snapshotter" "${host_bin}/sysbox-snapshotter"
@@ -336,6 +337,7 @@ function rm_sysbox_from_host() {
 	rm -f "${host_bin}/sysbox-mgr"
 	rm -f "${host_bin}/sysbox-fs"
 	rm -f "${host_bin}/sysbox-runc"
+	rm -f "${host_bin}/sysbox-runc-lite"
 	rm -f "${host_bin}/sysbox-snapshotter"
 	rm -f "${host_bin}/sysbox-admission"
 
@@ -697,17 +699,18 @@ function config_crio_for_sysbox() {
 		dasel put string -f "${host_crio_conf_file}" -p toml -m 'crio.storage_option.[]' "overlay.mountopt=metacopy=on"
 	fi
 
-	# Add sysbox-runc and its monitoring-path.
-	dasel put object -f "${host_crio_conf_file}" -p toml -t string -t string -t string "crio.runtime.runtimes.sysbox-runc" \
-		"runtime_path=/usr/bin/sysbox-runc" "runtime_type=oci" "monitor_path=/usr/local/bin/crio-conmon"
-
-	# Add sysbox-runc's allowed annotations.
-	dasel put string -f "${host_crio_conf_file}" -p toml "crio.runtime.runtimes.sysbox-runc.allowed_annotations.[0]" \
-		"io.kubernetes.cri-o.userns-mode"
+	# Both standard Sysbox handlers accept the same rootfs annotation contract;
+	# only the selected OCI runtime binary differs.
+	for runtime_name in sysbox-runc sysbox-runc-lite; do
+		dasel put object -f "${host_crio_conf_file}" -p toml -t string -t string -t string "crio.runtime.runtimes.${runtime_name}" \
+			"runtime_path=/usr/bin/${runtime_name}" "runtime_type=oci" "monitor_path=/usr/local/bin/crio-conmon"
+		dasel put string -f "${host_crio_conf_file}" -p toml "crio.runtime.runtimes.${runtime_name}.allowed_annotations.[0]" \
+			"io.kubernetes.cri-o.userns-mode"
+	done
 
 	# In Flatcar's case we must further adjust crio config.
 	if host_flatcar_distro; then
-		sed -i 's@/usr/bin/sysbox-runc@/opt/bin/sysbox-runc@' ${host_crio_conf_file}
+		sed -i 's@/usr/bin/sysbox-runc@/opt/bin/sysbox-runc@g; s@/usr/bin/sysbox-runc-lite@/opt/bin/sysbox-runc-lite@g' ${host_crio_conf_file}
 	fi
 }
 
@@ -717,11 +720,32 @@ function unconfig_crio_for_sysbox() {
 	# Note: dasel does not yet have a proper delete command, so we need the "sed" below.
 	dasel put document -f "${host_crio_conf_file}" -p toml '.crio.runtime.runtimes.sysbox-runc' ''
 	sed -i "s/\[crio.runtime.runtimes.sysbox-runc\]//g" "${host_crio_conf_file}"
+	dasel put document -f "${host_crio_conf_file}" -p toml '.crio.runtime.runtimes.sysbox-runc-lite' ''
+	sed -i "s/\[crio.runtime.runtimes.sysbox-runc-lite\]//g" "${host_crio_conf_file}"
 }
 
 #
 # Containerd Configuration Functions
 #
+
+function config_containerd_runtime() {
+	local runtime_name=$1 runtime_path=$2
+	local cri_v1="plugins.io\\.containerd\\.grpc\\.v1\\.cri.containerd.runtimes.${runtime_name}"
+	local cri_v2="plugins.io\\.containerd\\.cri\\.v1\\.runtime.containerd.runtimes.${runtime_name}"
+
+	for cri_path in "${cri_v1}" "${cri_v2}"; do
+		dasel put string -f "${host_containerd_conf_file}" -p toml -s "${cri_path}.runtime_type" -v "io.containerd.runc.v2"
+		dasel put string -f "${host_containerd_conf_file}" -p toml -s "${cri_path}.options.BinaryName" -v "${runtime_path}"
+		dasel put bool -f "${host_containerd_conf_file}" -p toml -s "${cri_path}.options.SystemdCgroup" -v true
+		dasel delete -f "${host_containerd_conf_file}" -p toml -s "${cri_path}.pod_annotations" >/dev/null 2>&1 || true
+		dasel put string -f "${host_containerd_conf_file}" -p toml -s "${cri_path}.pod_annotations.[0]" -v "sysbox/rootfs-rw-layer"
+		if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+			dasel put string -f "${host_containerd_conf_file}" -p toml -s "${cri_path}.snapshotter" -v "sysbox"
+		else
+			dasel delete -f "${host_containerd_conf_file}" -p toml -s "${cri_path}.snapshotter" >/dev/null 2>&1 || true
+		fi
+	done
+}
 
 function config_containerd_for_sysbox() {
 	echo "Adding Sysbox to containerd config ..."
@@ -731,10 +755,12 @@ function config_containerd_for_sysbox() {
 		cp "${host_containerd_conf_file}" "${host_containerd_conf_file_backup}"
 	fi
 
-	# Determine the correct sysbox-runc path
+	# Determine the correct Sysbox runtime paths.
 	local sysbox_runc_path="/usr/bin/sysbox-runc"
+	local sysbox_runc_lite_path="/usr/bin/sysbox-runc-lite"
 	if host_flatcar_distro; then
 		sysbox_runc_path="/opt/bin/sysbox-runc"
+		sysbox_runc_lite_path="/opt/bin/sysbox-runc-lite"
 	fi
 
 	# Check if sysbox-runc runtime section already exists
@@ -802,6 +828,10 @@ function config_containerd_for_sysbox() {
 			-s "proxy_plugins.sysbox" >/dev/null 2>&1 || true
 	fi
 
+	# sysbox-runc-lite shares the snapshotter and webhook contract; only its
+	# OCI runtime binary differs from sysbox-runc.
+	config_containerd_runtime "sysbox-runc-lite" "${sysbox_runc_lite_path}"
+
 	echo "Restarting containerd to apply changes ..."
 	systemctl restart containerd
 }
@@ -810,15 +840,19 @@ function unconfig_containerd_for_sysbox() {
 	echo "Removing Sysbox from containerd config ..."
 
 	if [ -f "${host_containerd_conf_file}" ]; then
-		# Check if sysbox-runc runtime configuration exists
-		if grep -q "runtimes.sysbox-runc" "${host_containerd_conf_file}"; then
-			echo "Removing sysbox-runc runtime configuration ..."
+		# Remove both handlers; the snapshotter proxy is shared between them.
+		if grep -q "runtimes.sysbox-runc" "${host_containerd_conf_file}" || grep -q "runtimes.sysbox-runc-lite" "${host_containerd_conf_file}"; then
+			echo "Removing Sysbox runtime configuration ..."
 
 			# Delete the entire sysbox-runc runtime section using dasel
 			dasel delete -f "${host_containerd_conf_file}" -p toml \
 				-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc"
 			dasel delete -f "${host_containerd_conf_file}" -p toml \
 				-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc" >/dev/null 2>&1 || true
+			dasel delete -f "${host_containerd_conf_file}" -p toml \
+				-s "plugins.io\.containerd\.grpc\.v1\.cri.containerd.runtimes.sysbox-runc-lite" >/dev/null 2>&1 || true
+			dasel delete -f "${host_containerd_conf_file}" -p toml \
+				-s "plugins.io\.containerd\.cri\.v1\.runtime.containerd.runtimes.sysbox-runc-lite" >/dev/null 2>&1 || true
 			dasel delete -f "${host_containerd_conf_file}" -p toml \
 				-s "proxy_plugins.sysbox" >/dev/null 2>&1 || true
 
@@ -855,6 +889,7 @@ function restart_k3s() {
 
 function write_default_k3s_containerd_template() {
 	local sysbox_runc_path=$1
+	local sysbox_runc_lite_path=$2
 	local snapshotter_config=""
 	local proxy_config=""
 	if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
@@ -913,6 +948,15 @@ ${snapshotter_config}
   SystemdCgroup = true
   BinaryName = "${sysbox_runc_path}"
 
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite]
+  runtime_type = "io.containerd.runc.v2"
+  pod_annotations = ["sysbox/rootfs-rw-layer"]
+${snapshotter_config}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite.options]
+  SystemdCgroup = true
+  BinaryName = "${sysbox_runc_lite_path}"
+
 [plugins.'io.containerd.cri.v1.images'.registry]
   config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
 EOF
@@ -924,8 +968,10 @@ function config_k3s_containerd_for_sysbox() {
 	mkdir -p "${host_k3s_containerd_conf_dir}"
 
 	local sysbox_runc_path="/usr/bin/sysbox-runc"
+	local sysbox_runc_lite_path="/usr/bin/sysbox-runc-lite"
 	if host_flatcar_distro; then
 		sysbox_runc_path="/opt/bin/sysbox-runc"
+		sysbox_runc_lite_path="/opt/bin/sysbox-runc-lite"
 	fi
 
 	if [ -f "${host_k3s_containerd_conf_template}" ] && [ ! -f "${host_k3s_containerd_conf_template_backup}" ]; then
@@ -933,8 +979,8 @@ function config_k3s_containerd_for_sysbox() {
 	fi
 
 	if [ ! -f "${host_k3s_containerd_conf_template}" ]; then
-		write_default_k3s_containerd_template "${sysbox_runc_path}"
-	elif grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
+		write_default_k3s_containerd_template "${sysbox_runc_path}" "${sysbox_runc_lite_path}"
+	elif grep -q "runtimes.sysbox-runc]" "${host_k3s_containerd_conf_template}"; then
 		if sed -n '/runtimes.sysbox-runc]/,/^$/p' "${host_k3s_containerd_conf_template}" | grep -q "pod_annotations"; then
 			sed -i '/runtimes.sysbox-runc]/,/^$/ s@^[[:space:]]*pod_annotations = .*@  pod_annotations = ["sysbox/rootfs-rw-layer"]@' "${host_k3s_containerd_conf_template}"
 		else
@@ -1014,15 +1060,37 @@ ${proxy_config}
 EOF
 	fi
 
+	# Existing K3s templates may predate runc-lite. Add the second standard
+	# handler without changing the user's default runc handler.
+	if ! grep -q "runtimes.sysbox-runc-lite" "${host_k3s_containerd_conf_template}"; then
+		local lite_snapshotter_config=""
+		if [[ "${sysbox_snapshotter_enabled}" == "true" ]]; then
+			lite_snapshotter_config='  snapshotter = "sysbox"'
+		fi
+		cat >>"${host_k3s_containerd_conf_template}" <<EOF
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite]
+  runtime_type = "io.containerd.runc.v2"
+  pod_annotations = ["sysbox/rootfs-rw-layer"]
+${lite_snapshotter_config}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite.options]
+  SystemdCgroup = true
+  BinaryName = "${sysbox_runc_lite_path}"
+EOF
+	fi
+
 	restart_k3s
 }
 
 function unconfig_k3s_containerd_for_sysbox() {
 	echo "Removing Sysbox from K3s containerd config ..."
 
-	if [ -f "${host_k3s_containerd_conf_template}" ] && grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}"; then
+	if [ -f "${host_k3s_containerd_conf_template}" ] && { grep -q "runtimes.sysbox-runc" "${host_k3s_containerd_conf_template}" || grep -q "runtimes.sysbox-runc-lite" "${host_k3s_containerd_conf_template}"; }; then
 		sed -i '/runtimes.sysbox-runc.options]/,/^$/d' "${host_k3s_containerd_conf_template}"
 		sed -i '/runtimes.sysbox-runc]/,/^$/d' "${host_k3s_containerd_conf_template}"
+		sed -i '/runtimes.sysbox-runc-lite.options]/,/^$/d' "${host_k3s_containerd_conf_template}"
+		sed -i '/runtimes.sysbox-runc-lite]/,/^$/d' "${host_k3s_containerd_conf_template}"
 		sed -i '/^\[proxy_plugins\."sysbox"\]/,/^$/d' "${host_k3s_containerd_conf_template}"
 		restart_k3s
 	else
