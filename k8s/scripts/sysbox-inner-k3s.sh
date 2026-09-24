@@ -300,7 +300,6 @@ if [ ! -x "$bin_dir/sysbox-runc.real" ]; then
 fi
 cat >"$bin_dir/sysbox-runc-nested" <<EOF
 #!/bin/sh
-export SYSBOX_ALLOW_PROC_EXEC=true
 exec "$bin_dir/sysbox-runc.real" --mapping-mode nested-identity --log /var/log/sysbox-runc-nested.log --log-format json "\$@"
 EOF
 chmod 0755 "$bin_dir/sysbox-runc-nested"
@@ -357,8 +356,8 @@ state = "/run/k3s/containerd"
   # as well as on the explicit sysbox-runc handler; otherwise CRI strips the
   # annotation before the snapshotter sees it and persistentSpecialMounts is
   # silently skipped for Pods that correctly omit runtimeClassName.
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
-  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
+  pod_annotations = ["sysbox/rootfs-rw-layer"]
+  container_annotations = ["sysbox/rootfs-rw-layer"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
   SystemdCgroup = false
@@ -367,8 +366,8 @@ state = "/run/k3s/containerd"
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite]
   runtime_type = "io.containerd.runc.v2"
   snapshotter = "sysbox"
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
-  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
+  pod_annotations = ["sysbox/rootfs-rw-layer"]
+  container_annotations = ["sysbox/rootfs-rw-layer"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite.options]
   SystemdCgroup = false
@@ -377,8 +376,8 @@ state = "/run/k3s/containerd"
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
   runtime_type = "io.containerd.runc.v2"
   snapshotter = "sysbox"
-  pod_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
-  container_annotations = ["sysbox/rootfs-rw-layer", "sysbox/skip-special-mounts", "sysbox/allow-proc-exec"]
+  pod_annotations = ["sysbox/rootfs-rw-layer"]
+  container_annotations = ["sysbox/rootfs-rw-layer"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
   SystemdCgroup = false
