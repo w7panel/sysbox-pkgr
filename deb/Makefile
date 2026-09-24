@@ -46,6 +46,9 @@ UBUNTU_MIRROR?=http://archive.ubuntu.com/ubuntu
 DOCKER_APT_MIRROR?=https://download.docker.com/linux/ubuntu
 GOPROXY?=https://proxy.golang.org,direct
 GITHUB_PROXY?=https://gh-proxy.org/
+GOCACHE?=$(HOME)/.cache/go-build
+GOMODCACHE?=$(GOPATH)/pkg/mod
+GIT_CONFIG?=/root/.gitconfig
 
 # Sysbox source-code locations.
 ifeq ($(EDITION),ce)
@@ -86,8 +89,9 @@ DOCKER_BUILD=docker build                              \
 DOCKER_RUN=docker run --privileged --rm -i    \
 	-e EDITION                                \
 	-v $(CURDIR)/build/$(ARCH)/$@:/build      \
-	-v $(GOPATH)/pkg/mod:/go/pkg/mod          \
-	-v $(HOME)/.gitconfig:/root/.gitconfig:ro \
+	-v $(GOMODCACHE):/go/pkg/mod              \
+	-v $(GOCACHE):/root/.cache/go-build       \
+	-v $(GIT_CONFIG):/root/.gitconfig:ro      \
 	-v /lib/modules/$(KERNEL_REL):/lib/modules/$(KERNEL_REL):ro \
 	-v /usr/src/$(HEADERS):/usr/src/$(HEADERS):ro \
 	-v /usr/src/$(HEADERS_BASE):/usr/src/$(HEADERS_BASE):ro \
@@ -107,8 +111,9 @@ DOCKER_BUILD_RELEASE=docker build                                \
 DOCKER_RUN_RELEASE=docker run --privileged --rm -i               \
 	-e EDITION                                                   \
 	-v $(CURDIR)/build/$(ARCH)/$(RELEASE_BASELINE_IMAGE):/build  \
-	-v $(GOPATH)/pkg/mod:/go/pkg/mod                             \
-	-v $(HOME)/.gitconfig:/root/.gitconfig:ro                    \
+	-v $(GOMODCACHE):/go/pkg/mod                                 \
+	-v $(GOCACHE):/root/.cache/go-build                          \
+	-v $(GIT_CONFIG):/root/.gitconfig:ro                         \
 	-v /lib/modules/$(KERNEL_REL):/lib/modules/$(KERNEL_REL):ro  \
 	-v /usr/src/$(HEADERS):/usr/src/$(HEADERS):ro                \
 	-v /usr/src/$(HEADERS_BASE):/usr/src/$(HEADERS_BASE):ro      \
