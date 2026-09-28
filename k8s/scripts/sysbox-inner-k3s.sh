@@ -287,22 +287,7 @@ if ! grep -q '^ID=' "$host_root/etc/os-release" 2>/dev/null; then
 	mkdir -p "$host_root/usr/lib"
 	echo 'ID=k3s' >"$host_root/usr/lib/os-release"
 fi
-# The dedicated handler and manager must agree on the explicit identity mode;
-# neither component reads or modifies the outer container's subuid files. Keep
-# the wrapper distinct from the unmodified image binary and expose it through
-# the standard sysbox-runc handler (never a second RuntimeClass name).
-if [ ! -x "$bin_dir/sysbox-runc.real" ]; then
-	# Keep the canonical binary path intact. The CKM server command and
-	# readiness checks use /opt/sysbox/bin/generic/sysbox-runc on every
-	# restart; moving it away made a previously initialized L1 fail after
-	# the first Pod restart. The nested wrapper calls this private copy.
-	cp -a "$bin_dir/sysbox-runc" "$bin_dir/sysbox-runc.real"
-fi
-cat >"$bin_dir/sysbox-runc-nested" <<EOF
-#!/bin/sh
-exec "$bin_dir/sysbox-runc.real" --mapping-mode nested-identity --log /var/log/sysbox-runc-nested.log --log-format json "\$@"
-EOF
-chmod 0755 "$bin_dir/sysbox-runc-nested"
+rm -f "$bin_dir/sysbox-runc-nested" "$bin_dir/sysbox-runc.real"
 cat >"$config_template" <<EOF
 # Managed by Sysbox nested runtime. Remove only after the L1 Sysbox chart is uninstalled.
 version = 3
@@ -360,16 +345,6 @@ state = "/run/k3s/containerd"
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite.options]
   SystemdCgroup = false
   BinaryName = "$bin_dir/sysbox-runc-lite"
-
-[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
-  runtime_type = "io.containerd.runc.v2"
-  snapshotter = "sysbox"
-  pod_annotations = ["sysbox/rootfs-rw-layer"]
-  container_annotations = ["sysbox/rootfs-rw-layer"]
-
-[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
-  SystemdCgroup = false
-  BinaryName = "$bin_dir/sysbox-runc-nested"
 
 [plugins.'io.containerd.cri.v1.images'.registry]
   config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
