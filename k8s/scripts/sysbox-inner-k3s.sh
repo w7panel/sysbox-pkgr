@@ -326,9 +326,6 @@ state = "/run/k3s/containerd"
   disable_snapshot_annotations = false
   use_local_image_pull = true
 
-[plugins.'io.containerd.cri.v1.images'.runtime_platforms.sysbox-runc-lite]
-  snapshotter = "sysbox"
-
 [plugins.'io.containerd.cri.v1.images'.pinned_images]
   sandbox = "$pause_image"
 
@@ -343,7 +340,6 @@ state = "/run/k3s/containerd"
   runtime_type = "io.containerd.runc.v2"
   snapshotter = "sysbox"
   pod_annotations = ["sysbox/rootfs-rw-layer"]
-  container_annotations = ["sysbox/rootfs-rw-layer"]
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc-lite.options]
   SystemdCgroup = false
