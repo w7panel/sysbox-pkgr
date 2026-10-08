@@ -298,6 +298,7 @@ state = "/run/k3s/containerd"
 [proxy_plugins."sysbox"]
   type = "snapshot"
   address = "$snapshotter_socket"
+  capabilities = ["remap-ids"]
 
 [grpc]
   address = "/run/k3s/containerd/containerd.sock"
@@ -311,10 +312,6 @@ state = "/run/k3s/containerd"
 
 [plugins.'io.containerd.cri.v1.runtime']
   enable_selinux = false
-  # L3 runtimes cannot write the outer /proc/sys tree from nested userns.
-  enable_unprivileged_ports = false
-  enable_unprivileged_icmp = false
-  device_ownership_from_security_context = false
 
 [plugins.'io.containerd.cri.v1.runtime'.cni]
   bin_dir = "/var/lib/rancher/k3s/data/cni"
