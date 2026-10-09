@@ -99,7 +99,7 @@ write_runtime_daemon_pid() {
 				exit 0
 			done
 			exit 1
-		' sh "$expected" "$pidfile"; then
+		' "$expected" "$pidfile"; then
 			return 0
 		fi
 		i=$((i + 1))
@@ -127,20 +127,11 @@ stop_daemon() {
 }
 
 snapshotter_is_live() {
-	# sysbox-snapshotter has no native pidfile. In an entered PID namespace
-	# the outer nsenter PID cannot be translated reliably, so use the socket
-	# plus containerd RPC as the liveness contract.
-	if [ "$enter_pid_ns" = "true" ]; then
-		socket_is_live "$snapshotter_socket" || return 1
-		run_in_runtime_ns /proc/1/root/bin/ctr \
-			--address "$containerd_socket" snapshots --snapshotter sysbox ls >/dev/null 2>&1
-		return $?
-	fi
-	daemon_is_live "$snapshotter_socket" /run/sysbox/sysbox-snapshotter.pid sysbox-snapshotter || return 1
-	if socket_is_live "$containerd_socket"; then
-		run_in_runtime_ns /proc/1/root/bin/ctr \
-			--address "$containerd_socket" snapshots --snapshotter sysbox ls >/dev/null 2>&1
-	fi
+	# The socket and containerd RPC remain valid when the agent Pod is
+	# recreated. A pidfile can be stale across K3s and agent restarts.
+	socket_is_live "$snapshotter_socket" || return 1
+	run_in_runtime_ns /proc/1/root/bin/ctr \
+		--address "$containerd_socket" snapshots --snapshotter sysbox ls >/dev/null 2>&1
 }
 
 wait_for_socket() {
@@ -323,6 +314,11 @@ state = "/run/k3s/containerd"
   disable_snapshot_annotations = false
   use_local_image_pull = true
 
+# CRI uses this mapping to report the sysbox snapshotter filesystem path in
+# writable-layer stats. Without it, fresh K3s nodes return an empty mountpoint.
+[plugins.'io.containerd.cri.v1.images'.runtime_platforms.sysbox-runc-lite]
+  snapshotter = "sysbox"
+
 [plugins.'io.containerd.cri.v1.images'.pinned_images]
   sandbox = "$pause_image"
 
@@ -345,6 +341,12 @@ state = "/run/k3s/containerd"
 [plugins.'io.containerd.cri.v1.images'.registry]
   config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
 EOF
+
+# The Chart agent first prepares the filesystem and template, then restarts
+# K3s. Until that restart, containerd cannot serve the new proxy snapshotter.
+if [ "${SYSBOX_INNER_CONFIG_ONLY:-false}" = "true" ]; then
+	exit 0
+fi
 
 managed_pids=
 managed_sockets=

@@ -30,7 +30,7 @@ ARG KUBECTL_VERSION="1.32.13"
 ARG CRICTL_VERSION="v1.35.0"
 ARG GITHUB_PROXY="https://gh-proxy.org/"
 
-RUN dnf install -y --allowerasing systemd curl wget git bc which jq procps-ng rsync fuse3 \
+RUN dnf install -y --allowerasing systemd curl wget git bc which jq procps-ng rsync fuse3 util-linux \
     && dnf clean all
 
 RUN case "${SYS_ARCH}" in \
@@ -85,5 +85,6 @@ COPY systemd/sysbox.service /opt/sysbox/systemd/sysbox.service
 
 COPY scripts/sysbox-deploy-k8s.sh /opt/sysbox/scripts/sysbox-deploy-k8s.sh
 COPY scripts/sysbox-inner-k3s.sh /opt/sysbox/scripts/sysbox-inner-k3s.sh
+COPY scripts/sysbox-inner-agent.sh /opt/sysbox/scripts/sysbox-inner-agent.sh
 COPY scripts/sysbox-installer-helper.sh /opt/sysbox/scripts/sysbox-installer-helper.sh
 COPY scripts/sysbox-removal-helper.sh /opt/sysbox/scripts/sysbox-removal-helper.sh
