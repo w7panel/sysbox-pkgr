@@ -78,7 +78,13 @@ status() {
   find_target
   in_node /bin/sh -ec '
     test -S /run/sysbox/sysbox-snapshotter.sock
-    /bin/ctr --address /run/k3s/containerd/containerd.sock snapshots --snapshotter sysbox ls >/dev/null
+    awk '\''$4 == "00010000" && $8 == "/run/sysbox/sysbox-snapshotter.sock" { found=1 } END { exit !found }'\'' /proc/net/unix
+    # Query the snapshotter directly: containerd can serve an empty snapshot
+    # list from its metadata without ever contacting the snapshotter.
+    # A fresh snapshotter has no namespace bucket yet. This exact server
+    # response still proves the RPC worked; transport errors must fail.
+    reply=$(/bin/ctr --address /run/sysbox/sysbox-snapshotter.sock --timeout 3s snapshots ls 2>&1) ||
+      printf "%s\n" "$reply" | grep -Fxq "ctr: bucket does not exist: not found"
     /bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock info | grep -Fq "sysbox-runc-lite"
   ' >/dev/null 2>&1
 }

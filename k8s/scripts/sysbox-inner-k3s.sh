@@ -55,12 +55,7 @@ die() {
 }
 
 socket_is_live() {
-	socket=$1
-	if [ -n "$mount_ns_pid" ]; then
-		runtime_shell '[ -S "$1" ] && grep -Fq " $1" /proc/net/unix' "$socket"
-	else
-		[ -S "$socket" ] && grep -Fq " $socket" /proc/net/unix
-	fi
+	runtime_shell '[ -S "$1" ] && awk -v socket="$1" '\''$4 == "00010000" && $8 == socket { found=1 } END { exit !found }'\'' /proc/net/unix' "$1"
 }
 
 daemon_is_live() {
@@ -127,11 +122,14 @@ stop_daemon() {
 }
 
 snapshotter_is_live() {
-	# The socket and containerd RPC remain valid when the agent Pod is
+	# The socket and snapshotter RPC remain valid when the agent Pod is
 	# recreated. A pidfile can be stale across K3s and agent restarts.
 	socket_is_live "$snapshotter_socket" || return 1
-	run_in_runtime_ns /proc/1/root/bin/ctr \
-		--address "$containerd_socket" snapshots --snapshotter sysbox ls >/dev/null 2>&1
+	# An empty namespace returns this exact gRPC NotFound response; unlike a
+	# transport failure it confirms the snapshotter is serving requests.
+	reply=$(run_in_runtime_ns /proc/1/root/bin/ctr \
+		--address "$snapshotter_socket" --timeout 3s snapshots ls 2>&1) ||
+		printf '%s\n' "$reply" | grep -Fxq 'ctr: bucket does not exist: not found'
 }
 
 wait_for_socket() {
