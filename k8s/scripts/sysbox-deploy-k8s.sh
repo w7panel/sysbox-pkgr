@@ -431,6 +431,32 @@ function stop_sysbox() {
 	fi
 }
 
+# Newer distributions confine fusermount3 separately from sysbox-fs.
+function config_sysbox_apparmor() {
+	local profile="${host_etc}/apparmor.d/fusermount3"
+	local local_rules="${host_etc}/apparmor.d/local/fusermount3"
+	if [[ ! -f "$profile" || -e "${host_etc}/apparmor.d/disable/fusermount3" ]]; then
+		return
+	fi
+	if ! nsenter -t 1 -m -u -i -n -p --root -- sh -c 'test "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y'; then
+		return
+	fi
+
+	echo "Configuring fusermount3 AppArmor rules for Sysbox ..."
+	mkdir -p "$(dirname "$local_rules")"
+	local rule
+	while IFS= read -r rule; do
+		if ! grep -qxF -- "$rule" "$local_rules" 2>/dev/null; then
+			printf '\n%s\n' "$rule" >> "$local_rules"
+		fi
+	done <<'EOF'
+mount fstype=fuse options=(rw,nosuid,nodev) sysboxfs -> /var/lib/sysboxfs/*/,
+umount /var/lib/sysboxfs/*/,
+EOF
+	# Reload even on a retry after a previous parser failure.
+	nsenter -t 1 -m -u -i -n -p --root -- apparmor_parser -r /etc/apparmor.d/fusermount3
+}
+
 function install_sysbox() {
 	# Sysbox could potentially be already installed (during upgrades),
 	# so stop it first to ensure that copy instructions below can
@@ -1745,6 +1771,13 @@ function main() {
 			[[ "$do_sysbox_update" == "true" ]]; then
 			add_label_to_node "sysbox-runtime=installing"
 			install_sysbox_deps
+		fi
+
+		# Dependencies may install the profile; reconcile it even on same-version installs.
+		config_sysbox_apparmor
+
+		if [[ "$do_sysbox_install" == "true" ]] ||
+			[[ "$do_sysbox_update" == "true" ]]; then
 			install_sysbox
 			# Adjust the active container runtime to account for Sysbox presence.
 			if is_k3s_runtime; then
