@@ -304,9 +304,11 @@ state = "/run/k3s/containerd"
 [plugins.'io.containerd.cri.v1.runtime']
   enable_selinux = false
 
+{{- if or .NodeConfig.AgentConfig.CNIBinDir .NodeConfig.AgentConfig.CNIConfDir }}
 [plugins.'io.containerd.cri.v1.runtime'.cni]
-  bin_dir = "/var/lib/rancher/k3s/data/cni"
-  conf_dir = "/var/lib/rancher/k3s/agent/etc/cni/net.d"
+  {{ with .NodeConfig.AgentConfig.CNIBinDir }}bin_dirs = [{{ printf "%q" . }}]{{ end }}
+  {{ with .NodeConfig.AgentConfig.CNIConfDir }}conf_dir = {{ printf "%q" . }}{{ end }}
+{{ end }}
 
 [plugins.'io.containerd.cri.v1.images']
   snapshotter = "overlayfs"
