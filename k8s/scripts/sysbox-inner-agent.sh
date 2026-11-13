@@ -17,18 +17,6 @@ target_pid=
 
 die() { echo "sysbox-inner-agent: $*" >&2; exit 1; }
 log() { echo "sysbox-inner-agent: $*" >&2; }
-label_key=sysbox.w7panel.io/nested-runtime
-
-set_node_ready() {
-  [ -n "${NODE_NAME:-}" ] || return 0
-  /bin/kubectl label node "$NODE_NAME" "$label_key=ready" --overwrite >/dev/null 2>&1 || \
-    log "could not mark node $NODE_NAME ready"
-}
-
-clear_node_ready() {
-  [ -n "${NODE_NAME:-}" ] || return 0
-  /bin/kubectl label node "$NODE_NAME" "$label_key-" >/dev/null 2>&1 || true
-}
 
 # hostPID makes the CKM K3s server visible, but the agent still has its own
 # mount and network namespaces. Enter all three before touching L1 /run.
@@ -147,7 +135,6 @@ request_restart() {
   fi
   printf '%s\n' "$desired" >"$pending.tmp"
   mv "$pending.tmp" "$pending"
-  clear_node_ready
   log "K3s config changed; requesting one CKM server restart"
   # Terminating K3s ends the CKM server command. The outer Deployment restarts
   # its Server container, and the nested DaemonSet reconciles after recovery.
@@ -160,7 +147,6 @@ install_once() {
   save_original
   if status; then
     rm -f "$pending" "$agent_dir/restart-required"
-    set_node_ready
     return 0
   fi
   before=
@@ -172,10 +158,8 @@ install_once() {
   fi
   if status; then
     rm -f "$pending" "$agent_dir/restart-required"
-    set_node_ready
     return 0
   fi
-  clear_node_ready
   if [ "$before" != "$after" ] || { [ ! -f "$pending" ] && ! active_has_lite; }; then
     request_restart
   else
@@ -188,7 +172,6 @@ uninstall() {
   # A failed safety check must never remove the handler under running Pods.
   [ -d "$agent_dir" ] || return 0
   find_target
-  clear_node_ready
   changed=false
   if [ -f "$original" ]; then
     cp -p "$original" "$template"
