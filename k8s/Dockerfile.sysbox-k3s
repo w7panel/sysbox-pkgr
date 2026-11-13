@@ -30,7 +30,7 @@ ARG KUBECTL_VERSION="1.32.13"
 ARG CRICTL_VERSION="v1.35.0"
 ARG GITHUB_PROXY="https://gh-proxy.org/"
 
-RUN dnf install -y --allowerasing systemd curl wget git bc which jq procps-ng rsync fuse3 util-linux \
+RUN dnf install -y --allowerasing systemd curl wget git bc which jq procps-ng rsync fuse3 fuse-overlayfs util-linux \
     && dnf clean all
 
 RUN case "${SYS_ARCH}" in \
@@ -69,8 +69,12 @@ RUN git clone --branch k5.4 "${GITHUB_PROXY}https://github.com/nestybox/shiftfs-
 COPY bin/sysbox-ce /opt/sysbox/bin
 
 # The inner K3s launcher invokes rsync through the bundled Sysbox tool path.
+# fuse-overlayfs backs the mount.fuse3 shim that stands in for the generic
+# mount helper missing from minimal K3s images; without it the launcher fails
+# its dependency check on every pass.
 RUN cp -a /usr/bin/rsync /opt/sysbox/bin/generic/rsync
 RUN cp -a /usr/bin/fusermount3 /opt/sysbox/bin/generic/fusermount3
+RUN cp -a /usr/bin/fuse-overlayfs /opt/sysbox/bin/generic/fuse-overlayfs
 
 RUN ln -s /opt/sysbox/bin/generic/sysbox-admission /usr/local/bin/sysbox-admission
 

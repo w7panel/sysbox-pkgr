@@ -1,6 +1,13 @@
 #!/bin/sh
 # Reconcile the Sysbox runtime in a K3s node running inside a CKM container.
-set -eu
+#
+# Failures inside one reconcile pass must not terminate the process: the
+# DaemonSet would restart the agent, which also kills sysbox-mgr, sysbox-fs and
+# sysbox-snapshotter because they are children of this container. A crashed
+# agent therefore takes the runtime control plane down with it and cannot
+# recover while K3s is still starting, producing an endless restart loop.
+# `-e` is applied per pass instead; only `-u` is global.
+set -u
 
 host_data=${SYSBOX_INNER_HOST_DATA:-/host/var/lib/rancher/k3s}
 node_data=/var/lib/rancher/k3s
@@ -23,8 +30,11 @@ log() { echo "sysbox-inner-agent: $*" >&2; }
 find_target() {
   if [ -n "${SYSBOX_INNER_TARGET_PID:-}" ]; then
     target_pid=$SYSBOX_INNER_TARGET_PID
-    [ -e "/proc/$target_pid/exe" ] || die "target PID $target_pid is gone"
-    return
+    if [ ! -e "/proc/$target_pid/exe" ]; then
+      log "target PID $target_pid is gone"
+      return 1
+    fi
+    return 0
   fi
   for proc in /proc/[0-9]*; do
     [ -e "$proc/exe" ] || continue
@@ -42,9 +52,12 @@ find_target() {
       *) continue ;;
     esac
     target_pid=${proc##*/}
-    return
+    return 0
   done
-  die "cannot find the CKM K3s server process"
+  # K3s is briefly absent while the CKM server container is restarting. Report
+  # the miss so the caller can retry on its next pass instead of exiting.
+  log "cannot find the CKM K3s server process"
+  return 1
 }
 
 in_node() {
@@ -63,7 +76,7 @@ status() {
   release=$(cat "$agent_dir/current")
   node_bin_dir=$node_agent_dir/releases/$release/bin/generic
   active_has_lite || return 1
-  find_target
+  find_target || return 1
   in_node /bin/sh -ec '
     test -S /run/sysbox/sysbox-snapshotter.sock
     awk '\''$4 == "00010000" && $8 == "/run/sysbox/sysbox-snapshotter.sock" { found=1 } END { exit !found }'\'' /proc/net/unix
@@ -80,6 +93,9 @@ status() {
 stage_payload() {
   [ -x "$image_bins/sysbox-runc-lite" ] || die "missing sysbox-runc-lite in image"
   [ -x "$image_bins/sysbox-snapshotter" ] || die "missing sysbox-snapshotter in image"
+  # rsync feeds the release hash below; without this check a missing binary
+  # fails in sha256sum under `set -e` and leaves no diagnostic behind.
+  [ -x "$image_bins/rsync" ] || die "missing rsync in image"
   [ -r "$image_script" ] || die "missing sysbox-inner-k3s.sh in image"
   # A content-derived release directory leaves running executables intact
   # while a new image is installed. The config names the exact release.
@@ -119,7 +135,7 @@ save_original() {
 }
 
 launch_runtime() {
-  find_target
+  find_target || return 1
   SYSBOX_INNER_BIN_DIR="$node_bin_dir" \
   SYSBOX_HELPER_DIR=/bin/aux \
   SYSBOX_INNER_START_DAEMONS=false \
@@ -130,15 +146,25 @@ launch_runtime() {
 request_restart() {
   desired=$(sha256sum "$template" | cut -d ' ' -f 1)
   if [ -f "$pending" ] && [ "$(cat "$pending")" = "$desired" ]; then
+    # One TERM can be lost: the target may exit before the signal is delivered,
+    # or the outer Deployment may not have rebuilt the server yet. Without a
+    # retry the agent waits forever and readiness stays red for the whole
+    # lifetime of the Pod.
+    if [ -n "$(find "$pending" -mmin +2 2>/dev/null)" ]; then
+      log "restart still pending after 2 minutes; re-issuing TERM"
+      touch "$pending"
+      kill -TERM "$target_pid" 2>/dev/null || true
+      return 0
+    fi
     log "waiting for K3s to load desired config $desired"
-    return
+    return 0
   fi
   printf '%s\n' "$desired" >"$pending.tmp"
   mv "$pending.tmp" "$pending"
   log "K3s config changed; requesting one CKM server restart"
   # Terminating K3s ends the CKM server command. The outer Deployment restarts
   # its Server container, and the nested DaemonSet reconciles after recovery.
-  kill -TERM "$target_pid"
+  kill -TERM "$target_pid" 2>/dev/null || true
 }
 
 install_once() {
@@ -171,7 +197,7 @@ uninstall() {
   # The chart pre-delete Job checks for remaining lite Pods before calling us.
   # A failed safety check must never remove the handler under running Pods.
   [ -d "$agent_dir" ] || return 0
-  find_target
+  find_target || return 1
   changed=false
   if [ -f "$original" ]; then
     cp -p "$original" "$template"
@@ -196,11 +222,14 @@ uninstall() {
 case "${1:-}" in
   install)
     while :; do
-      install_once
+      # Keep one failing pass from terminating the container. Restarting the
+      # agent would kill the runtime daemons it owns and cannot recover while
+      # K3s is starting, which turns a transient miss into CrashLoopBackOff.
+      ( set -e; install_once ) || log "reconcile pass failed (exit $?); retrying"
       sleep 10
     done
     ;;
-  status) status ;;
-  uninstall) uninstall ;;
+  status) ( set -e; status ) ;;
+  uninstall) ( set -e; uninstall ) ;;
   *) die "usage: $0 install|status|uninstall" ;;
 esac

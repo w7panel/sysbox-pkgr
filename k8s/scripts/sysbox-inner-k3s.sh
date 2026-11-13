@@ -200,8 +200,22 @@ if [ -e "$helper_dir/iptables-nft" ]; then
 		ln -sf "$bin_dir/$utility" "$host_root/usr/bin/$utility"
 	done
 fi
+# Tools the nested runtime invokes from inside the K3s rootfs: sysbox-mgr's
+# preflight and containerd's fuse3 mount helper resolve them from the node
+# root, not from this installer container. Link whatever the image carries and
+# fail only when neither location provides the tool.
 for dependency in modprobe iptables fusermount3 fuse-overlayfs; do
-	command -v "$dependency" >/dev/null || die "inner K3s Sysbox requires $dependency in PATH"
+	if [ ! -e "$host_root/usr/bin/$dependency" ] && [ ! -e "$host_root/usr/sbin/$dependency" ]; then
+		for src in "$bin_dir/$dependency" "$helper_dir/$dependency"; do
+			if [ -x "$src" ]; then
+				ln -sf "$src" "$host_root/usr/bin/$dependency"
+				break
+			fi
+		done
+	fi
+	if [ ! -e "$host_root/usr/bin/$dependency" ] && [ ! -e "$host_root/usr/sbin/$dependency" ]; then
+		die "inner K3s Sysbox requires $dependency in the K3s rootfs"
+	fi
 done
 
 # Minimal K3s images don't ship the generic mount helper used by containerd's
