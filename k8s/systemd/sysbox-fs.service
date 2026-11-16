@@ -6,11 +6,14 @@ After=sysbox-mgr.service
 [Service]
 Type=simple
 Type=notify
-ExecStart=/usr/bin/sysbox-fs
-TimeoutStartSec=10
-TimeoutStopSec=10
+ExecStart=/usr/bin/sysbox-fs --session-recovery
+TimeoutStartSec=90
+TimeoutStopSec=90
 StartLimitInterval=0
 NotifyAccess=main
+# Keep seccomp listeners alive across the complete sysbox stop/start sequence.
+FileDescriptorStoreMax=65536
+FileDescriptorStorePreserve=yes
 OOMScoreAdjust=-500
 
 # The number of files opened by sysbox-fs is a function of the number of
