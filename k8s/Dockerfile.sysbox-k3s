@@ -88,6 +88,7 @@ COPY systemd/sysbox-snapshotter.service /opt/sysbox/systemd/sysbox-snapshotter.s
 COPY systemd/sysbox.service /opt/sysbox/systemd/sysbox.service
 
 COPY scripts/sysbox-deploy-k8s.sh /opt/sysbox/scripts/sysbox-deploy-k8s.sh
+COPY scripts/sysbox-installer.sh /opt/sysbox/scripts/sysbox-installer.sh
 COPY scripts/sysbox-inner-k3s.sh /opt/sysbox/scripts/sysbox-inner-k3s.sh
 COPY scripts/sysbox-inner-agent.sh /opt/sysbox/scripts/sysbox-inner-agent.sh
 COPY scripts/sysbox-installer-helper.sh /opt/sysbox/scripts/sysbox-installer-helper.sh
