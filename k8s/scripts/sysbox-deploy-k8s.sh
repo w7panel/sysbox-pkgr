@@ -473,6 +473,42 @@ function install_sysbox() {
 	start_sysbox
 }
 
+function precheck_fs_upgrade() {
+	local mounts pid args store preserve stored_fds
+	mounts=$(nsenter -t 1 -m -u -i -n -p -- sh -c '
+		[ -r /proc/1/mountinfo ] || exit 1
+		for file in /proc/[0-9]*/mountinfo; do
+			grep -qF " - fuse sysboxfs " "$file" 2>/dev/null
+			case $? in
+				0) echo present; exit 0 ;;
+				1) ;;
+				*) [ ! -e "$file" ] || exit 1 ;;
+			esac
+		done
+		echo absent
+	') || die "cannot inspect host mounts before Sysbox upgrade"
+	if ! systemctl is-active --quiet sysbox-fs; then
+		if [[ "$mounts" == present ]] ||
+			[[ -e "${host_run}/sysbox/fs-restart.json" ]]; then
+			die "inactive sysbox-fs has FUSE mounts or a checkpoint; preserve them and recover manually"
+		fi
+		return
+	fi
+	[[ "$mounts" == absent ]] && return
+	pid=$(systemctl show sysbox-fs -p MainPID --value) || die "cannot inspect running sysbox-fs"
+	[[ "$pid" =~ ^[1-9][0-9]*$ ]] || die "running sysbox-fs has no valid MainPID"
+	args=$(nsenter -t 1 -m -u -i -n -p -- cat "/proc/${pid}/cmdline" | tr '\0' ' ') ||
+		die "cannot inspect running sysbox-fs arguments"
+	store=$(systemctl show sysbox-fs -p FileDescriptorStoreMax --value) || die "cannot inspect sysbox-fs FD store"
+	preserve=$(systemctl show sysbox-fs -p FileDescriptorStorePreserve --value) || die "cannot inspect sysbox-fs FD store"
+	stored_fds=$(systemctl show sysbox-fs -p NFileDescriptorStore --value) || die "cannot inspect sysbox-fs FD store"
+	if [[ " $args" == *" --session-recovery "* && "$store" =~ ^[1-9][0-9]*$ &&
+		"$preserve" == yes && "$stored_fds" =~ ^[1-9][0-9]*$ ]]; then
+		return
+	fi
+	die "legacy sysbox-fs cannot preserve running FUSE sessions; migrate its Pods before replacing the service"
+}
+
 function remove_sysbox() {
 	echo "Removing $sysbox_edition from host ..."
 	stop_sysbox
@@ -1748,8 +1784,12 @@ function main() {
 
 	case "$action" in
 	install)
-		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
 		install_precheck
+		if [[ "$do_sysbox_install" == "true" ]] ||
+			[[ "$do_sysbox_update" == "true" ]]; then
+			precheck_fs_upgrade
+		fi
+		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
 
 		# Install CRI-O (if necessary)
 		if [[ "$do_crio_install" == "true" ]]; then
