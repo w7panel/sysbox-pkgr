@@ -1235,11 +1235,15 @@ EOF
 	fi
 
 	if ! grep -q "^\[plugins.'io.containerd.cri.v1.runtime'.cni\]" "${host_k3s_containerd_conf_template}"; then
-		cat >>"${host_k3s_containerd_conf_template}" <<'EOF'
+		local cni_bin_setting='bin_dirs = [{{ printf "%q" . }}]'
+		if [[ "$(kubectl get node "$NODE_NAME" -o jsonpath='{.status.nodeInfo.containerRuntimeVersion}')" == containerd://2.0.* ]]; then
+			cni_bin_setting='bin_dir = {{ printf "%q" . }}'
+		fi
+		cat >>"${host_k3s_containerd_conf_template}" <<EOF
 
 {{- if or .NodeConfig.AgentConfig.CNIBinDir .NodeConfig.AgentConfig.CNIConfDir }}
 [plugins.'io.containerd.cri.v1.runtime'.cni]
-  {{ with .NodeConfig.AgentConfig.CNIBinDir }}bin_dir = {{ printf "%q" . }}{{ end }}
+  {{ with .NodeConfig.AgentConfig.CNIBinDir }}${cni_bin_setting}{{ end }}
   {{ with .NodeConfig.AgentConfig.CNIConfDir }}conf_dir = {{ printf "%q" . }}{{ end }}
 {{ end }}
 EOF
