@@ -1234,6 +1234,17 @@ ${lite_snapshotter_config}
 EOF
 	fi
 
+	if ! grep -q "^\[plugins.'io.containerd.cri.v1.runtime'.cni\]" "${host_k3s_containerd_conf_template}"; then
+		cat >>"${host_k3s_containerd_conf_template}" <<'EOF'
+
+{{- if or .NodeConfig.AgentConfig.CNIBinDir .NodeConfig.AgentConfig.CNIConfDir }}
+[plugins.'io.containerd.cri.v1.runtime'.cni]
+  {{ with .NodeConfig.AgentConfig.CNIBinDir }}bin_dir = {{ printf "%q" . }}{{ end }}
+  {{ with .NodeConfig.AgentConfig.CNIConfDir }}conf_dir = {{ printf "%q" . }}{{ end }}
+{{ end }}
+EOF
+	fi
+
 	restart_k3s
 }
 
