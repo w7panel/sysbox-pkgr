@@ -108,6 +108,10 @@ do_crio_install="false"  # only set to true if containerd does not support user-
 do_kubelet_use_crio="false"
 sysbox_install_in_progress="false"
 sysbox_snapshotter_enabled="true"
+legacy_fs_migration_required="false"
+legacy_fs_cordoned="false"
+legacy_fs_migrated="false"
+fs_mounts_present="false"
 
 #
 # CRI-O Installation Functions
@@ -461,6 +465,9 @@ function install_sysbox() {
 	# Sysbox could potentially be already installed (during upgrades),
 	# so stop it first to ensure that copy instructions below can
 	# succeed.
+	if [[ "$legacy_fs_migrated" == "true" ]]; then
+		verify_legacy_fs_drained
+	fi
 	stop_sysbox
 
 	echo "Installing $sysbox_edition on host ..."
@@ -475,6 +482,7 @@ function install_sysbox() {
 
 function precheck_fs_upgrade() {
 	local mounts pid args store preserve stored_fds
+	legacy_fs_migration_required="false"
 	mounts=$(nsenter -t 1 -m -u -i -n -p -- sh -c '
 		[ -r /proc/1/mountinfo ] || exit 1
 		for file in /proc/[0-9]*/mountinfo; do
@@ -487,6 +495,8 @@ function precheck_fs_upgrade() {
 		done
 		echo absent
 	') || die "cannot inspect host mounts before Sysbox upgrade"
+	fs_mounts_present="false"
+	[[ "$mounts" == absent ]] || fs_mounts_present="true"
 	if ! systemctl is-active --quiet sysbox-fs; then
 		if [[ "$mounts" == present ]] ||
 			[[ -e "${host_run}/sysbox/fs-restart.json" ]]; then
@@ -494,7 +504,9 @@ function precheck_fs_upgrade() {
 		fi
 		return
 	fi
-	[[ "$mounts" == absent ]] && return
+	if [[ "$mounts" == absent && ! -e "${host_run}/sysbox/fs-restart.json" ]]; then
+		return
+	fi
 	pid=$(systemctl show sysbox-fs -p MainPID --value) || die "cannot inspect running sysbox-fs"
 	[[ "$pid" =~ ^[1-9][0-9]*$ ]] || die "running sysbox-fs has no valid MainPID"
 	args=$(nsenter -t 1 -m -u -i -n -p -- cat "/proc/${pid}/cmdline" | tr '\0' ' ') ||
@@ -506,7 +518,87 @@ function precheck_fs_upgrade() {
 		"$preserve" == yes && "$stored_fds" =~ ^[1-9][0-9]*$ ]]; then
 		return
 	fi
-	die "legacy sysbox-fs cannot preserve running FUSE sessions; migrate its Pods before replacing the service"
+	legacy_fs_migration_required="true"
+}
+
+function restore_legacy_fs_node() {
+	if [[ "$legacy_fs_cordoned" == "true" ]]; then
+		kubectl uncordon "$NODE_NAME" || echo "ERROR: cannot uncordon $NODE_NAME" >&2
+	fi
+}
+
+function verify_legacy_fs_drained() {
+	local pods rows
+	pods=$(kubectl get pod -A -o json) || die "cannot verify Pods after legacy sysbox-fs migration"
+	rows=$(jq -r --arg node "$NODE_NAME" '.items[] |
+		select(.spec.nodeName==$node and .spec.runtimeClassName=="sysbox-runc") |
+		.metadata.namespace + "/" + .metadata.name' <<< "$pods") ||
+		die "cannot inspect Pods after legacy sysbox-fs migration"
+	[[ -z "$rows" ]] || die "sysbox Pods remain during legacy sysbox-fs migration: $rows"
+	precheck_fs_upgrade
+	[[ "$fs_mounts_present" == "false" ]] ||
+		die "Sysbox FUSE mounts remain after Pod migration; old sysbox-fs remains running"
+	systemctl is-active --quiet sysbox-fs || die "old sysbox-fs stopped during Pod migration"
+}
+
+function migrate_legacy_fs_pods() {
+	local pods rows namespace name uid owner owner_name owner_uid current remaining attempt unschedulable
+	local checkpoint="${host_run}/sysbox/fs-restart.json"
+	pods=$(kubectl get pod -A -o json) || die "cannot list Pods before legacy sysbox-fs migration"
+	rows=$(jq -r --arg node "$NODE_NAME" '.items[] |
+		select(.spec.nodeName==$node and .spec.runtimeClassName=="sysbox-runc") |
+		[.metadata.namespace, .metadata.name, .metadata.uid,
+		 (.metadata.ownerReferences // [] | map(select(.controller==true)) | .[0].kind // ""),
+		 (.metadata.ownerReferences // [] | map(select(.controller==true)) | .[0].name // ""),
+		 (.metadata.ownerReferences // [] | map(select(.controller==true)) | .[0].uid // "")] | @tsv' <<< "$pods") ||
+		die "cannot inspect Pods before legacy sysbox-fs migration"
+	while IFS=$'\t' read -r namespace name uid owner owner_name owner_uid; do
+		[[ -z "$name" ]] && continue
+		case "$owner" in
+			ReplicaSet|ReplicationController|StatefulSet|Job) ;;
+			*) die "sysbox Pod $namespace/$name has no supported controller; migrate it manually" ;;
+		esac
+		[[ -n "$owner_name" && -n "$owner_uid" ]] ||
+			die "cannot verify controller of sysbox Pod $namespace/$name"
+		current=$(kubectl get "$owner" "$owner_name" -n "$namespace" -o jsonpath='{.metadata.uid}') ||
+			die "cannot inspect controller of sysbox Pod $namespace/$name"
+		[[ "$current" == "$owner_uid" ]] ||
+			die "controller of sysbox Pod $namespace/$name is missing or replaced"
+	done <<< "$rows"
+	unschedulable=$(kubectl get node "$NODE_NAME" -o jsonpath='{.spec.unschedulable}') ||
+		die "cannot inspect scheduling state of $NODE_NAME"
+	if [[ "$unschedulable" != true ]]; then
+		kubectl cordon "$NODE_NAME" || die "cannot cordon $NODE_NAME before legacy sysbox-fs migration"
+		legacy_fs_cordoned="true"
+		trap restore_legacy_fs_node EXIT
+	fi
+	while IFS=$'\t' read -r namespace name uid owner owner_name owner_uid; do
+		[[ -z "$name" ]] && continue
+		kubectl delete pod "$name" -n "$namespace" --wait=false ||
+			die "cannot delete legacy sysbox Pod $namespace/$name"
+	done <<< "$rows"
+	for ((attempt=0; attempt<120; attempt++)); do
+		remaining="false"
+		while IFS=$'\t' read -r namespace name uid owner owner_name owner_uid; do
+			[[ -z "$name" ]] && continue
+			current=$(kubectl get pod "$name" -n "$namespace" --ignore-not-found -o jsonpath='{.metadata.uid}') ||
+				die "cannot confirm deletion of legacy sysbox Pod $namespace/$name"
+			[[ "$current" != "$uid" ]] || remaining="true"
+		done <<< "$rows"
+		[[ "$remaining" == "false" ]] && break
+		sleep 1
+	done
+	[[ "$remaining" == "false" ]] || die "legacy sysbox Pods did not terminate; old sysbox-fs remains running"
+	verify_legacy_fs_drained
+	if [[ -e "$checkpoint" ]]; then
+		mkdir -p "$host_var_lib_sysbox_deploy_k8s"
+		local backup
+		backup=$(mktemp -d "${host_var_lib_sysbox_deploy_k8s}/fs-legacy-checkpoint.XXXXXXXX") ||
+			die "cannot preserve old sysbox-fs checkpoint"
+		mv "$checkpoint" "$backup/" || die "cannot preserve old sysbox-fs checkpoint"
+	fi
+	legacy_fs_migration_required="false"
+	legacy_fs_migrated="true"
 }
 
 function remove_sysbox() {
@@ -1788,6 +1880,9 @@ function main() {
 		if [[ "$do_sysbox_install" == "true" ]] ||
 			[[ "$do_sysbox_update" == "true" ]]; then
 			precheck_fs_upgrade
+			if [[ "$legacy_fs_migration_required" == "true" ]]; then
+				migrate_legacy_fs_pods
+			fi
 		fi
 		mkdir -p ${host_var_lib_sysbox_deploy_k8s}
 
@@ -1868,6 +1963,10 @@ function main() {
 		fi
 
 		add_label_to_node "sysbox-runtime=running"
+		if [[ "$legacy_fs_cordoned" == "true" ]]; then
+			kubectl uncordon "$NODE_NAME"
+			legacy_fs_cordoned="false"
+		fi
 
 		if [[ "$do_sysbox_install" == "true" ]] || [[ "$sysbox_install_in_progress" == "true" ]]; then
 			if [[ "$do_kubelet_use_crio" == "true" ]]; then
