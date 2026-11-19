@@ -15,7 +15,7 @@ rules:
   verbs: ["get", "patch"]
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get", "list", "watch", "delete"]
+  verbs: ["get", "list", "delete"]
 - apiGroups: [""]
   resources: ["replicationcontrollers"]
   verbs: ["get"]
